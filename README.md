@@ -10,9 +10,9 @@
 
 ## 预览
 
-![Admin 登录页](docs/images/admin-login.png)
+![Admin 登录页](docs/images/admin-login.jpg)
 
-![Admin 控制台](docs/images/admin-console.png)
+![Admin 控制台](docs/images/admin-console.jpg)
 
 ## 结构
 
