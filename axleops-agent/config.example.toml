@@ -1,9 +1,14 @@
 # Copy to config.toml and adjust values.
-# Or override with env: AXLEOPS_BIND / AXLEOPS_TOKEN / AXLEOPS_DATA_DIR
+# Or override with env:
+#   AXLEOPS_BIND / AXLEOPS_TOKEN / AXLEOPS_DATA_DIR
+#   AXLEOPS_WATCHDOG_ENABLED / AXLEOPS_WATCHDOG_INTERVAL_SECS
 #
 # Clients must send header: X-AxleOps-Token: <token>
 # Runtime under data_dir: services/ pids/ logs/
+# start 会把服务标成 desired_running；stop 清除。Agent 重启与崩溃后看门狗会按标记拉起。
 
 bind = "0.0.0.0:9100"
 token = "change-me-to-a-long-secret"
 data_dir = "./data"
+watchdog_enabled = true
+watchdog_interval_secs = 15

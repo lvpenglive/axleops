@@ -5,6 +5,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::Mutex;
 use sysinfo::{Pid, ProcessesToUpdate, System};
 use thiserror::Error;
 
@@ -44,16 +45,24 @@ struct ServiceMeta {
     /// Full launch spec when available (newer agents).
     #[serde(default)]
     spec: Option<ServiceSpec>,
+    /// Whether the service should be running (start/stop intent + watchdog).
+    #[serde(default)]
+    desired_running: bool,
 }
 
 pub struct ProcessManager {
     data_dir: PathBuf,
+    /// Serialize starts to avoid duplicate PID races under watchdog / concurrent API.
+    start_lock: Mutex<()>,
 }
 
 impl ProcessManager {
     pub fn new(data_dir: PathBuf) -> Self {
         let _ = fs::create_dir_all(data_dir.join("services"));
-        Self { data_dir }
+        Self {
+            data_dir,
+            start_lock: Mutex::new(()),
+        }
     }
 
     fn pid_path(&self, name: &str) -> PathBuf {
@@ -100,6 +109,7 @@ impl ProcessManager {
             kind: Self::kind_str(kind).to_string(),
             target,
             spec: Some(spec.clone()),
+            desired_running: false,
         })
     }
 
@@ -285,6 +295,7 @@ impl ProcessManager {
                         kind: record.kind.clone(),
                         target: record.target.clone(),
                         spec: None,
+                        desired_running: false,
                     });
                 }
                 let status = Self::status_running(name, &record);
@@ -307,6 +318,7 @@ impl ProcessManager {
                         kind: record.kind,
                         target: record.target,
                         spec: None,
+                        desired_running: false,
                     });
                 }
                 Self::status_stopped(name, kind, target, Some("stale pid cleared".into()))
@@ -337,7 +349,7 @@ impl ProcessManager {
     pub fn restart(&self, name: &str) -> Result<ServiceStatus, ProcessError> {
         let current = self.status(name);
         if current.pid.is_some() {
-            self.stop(name)?;
+            self.stop_runtime(name, false)?;
         }
         self.start_saved(name)
     }
@@ -392,6 +404,11 @@ impl ProcessManager {
     }
 
     pub fn start(&self, spec: &ServiceSpec) -> Result<ServiceStatus, ProcessError> {
+        let _guard = self
+            .start_lock
+            .lock()
+            .map_err(|_| ProcessError::Other("start lock poisoned".into()))?;
+
         let current = self.status(&spec.name);
         if current.pid.is_some()
             && matches!(
@@ -437,7 +454,9 @@ impl ProcessManager {
         let pid = child.id();
         let started_at = Utc::now();
 
-        self.write_meta(&Self::meta_from_spec(spec)?)?;
+        let mut meta = Self::meta_from_spec(spec)?;
+        meta.desired_running = true;
+        self.write_meta(&meta)?;
 
         self.write_record(
             &spec.name,
@@ -570,6 +589,10 @@ impl ProcessManager {
     }
 
     pub fn stop(&self, name: &str) -> Result<ServiceStatus, ProcessError> {
+        self.stop_runtime(name, true)
+    }
+
+    fn stop_runtime(&self, name: &str, clear_desired: bool) -> Result<ServiceStatus, ProcessError> {
         let record = self
             .read_record(name)?
             .ok_or(ProcessError::NotRunning)?;
@@ -612,9 +635,17 @@ impl ProcessManager {
                 kind: record.kind.clone(),
                 target: record.target.clone(),
                 spec: None,
+                desired_running: false,
             });
         }
         self.clear_record(name)?;
+
+        if clear_desired {
+            if let Ok(Some(mut meta)) = self.read_meta(name) {
+                meta.desired_running = false;
+                let _ = self.write_meta(&meta);
+            }
+        }
 
         let kind = Self::parse_kind(&record.kind);
         let jar_path = if kind == Some(ServiceKind::Jar) {
@@ -634,6 +665,70 @@ impl ProcessManager {
             message: Some("stopped".into()),
             healthy: None,
         })
+    }
+
+    /// On Agent boot: start services previously marked desired_running.
+    pub fn recover_desired(&self) {
+        let Ok(names) = self.collect_service_names() else {
+            return;
+        };
+        for name in names {
+            let Ok(Some(meta)) = self.read_meta(&name) else {
+                continue;
+            };
+            if !meta.desired_running {
+                continue;
+            }
+            match self.start_saved(&name) {
+                Ok(st) => tracing::info!(service = %name, pid = ?st.pid, "recovered desired service"),
+                Err(ProcessError::AlreadyRunning(pid)) => {
+                    tracing::info!(service = %name, pid, "desired service already running")
+                }
+                Err(e) => tracing::warn!(service = %name, error = %e, "failed to recover desired service"),
+            }
+        }
+    }
+
+    /// Periodic watchdog: restart desired services that exited or became unhealthy.
+    pub fn watchdog_tick(&self) {
+        let Ok(names) = self.collect_service_names() else {
+            return;
+        };
+        for name in names {
+            let Ok(Some(meta)) = self.read_meta(&name) else {
+                continue;
+            };
+            if !meta.desired_running {
+                continue;
+            }
+            let st = self.status(&name);
+            let need_restart = match st.state {
+                ServiceState::Running => false,
+                // Process still up — avoid flapping restarts on stuck health probes.
+                ServiceState::Unhealthy => {
+                    tracing::debug!(service = %name, "desired service unhealthy; not restarting");
+                    false
+                }
+                ServiceState::Stopped | ServiceState::Unknown => true,
+            };
+            if !need_restart {
+                continue;
+            }
+            if st.pid.is_some() {
+                if let Err(e) = self.stop_runtime(&name, false) {
+                    tracing::warn!(service = %name, error = %e, "watchdog stop before restart failed");
+                }
+            }
+            match self.start_saved(&name) {
+                Ok(st) => tracing::warn!(
+                    service = %name,
+                    pid = ?st.pid,
+                    "watchdog restarted desired service"
+                ),
+                Err(ProcessError::AlreadyRunning(_)) => {}
+                Err(e) => tracing::warn!(service = %name, error = %e, "watchdog restart failed"),
+            }
+        }
     }
 
     pub fn tail_log(&self, name: &str, max_bytes: u64) -> Result<String, ProcessError> {

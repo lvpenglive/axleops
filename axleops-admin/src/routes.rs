@@ -1,9 +1,13 @@
-use crate::auth::AuthToken;
+use crate::auth::AuthUser;
 use crate::models::{
     AgentHealthView, AgentInfo, ApiResponse, CreateUpstreamRequest, HealthInfo,
     ImportUpstreamRequest, ProxyHealthView, ProxyInfo, RegisterAgentRequest, RegisterProxyRequest,
     StartServiceRequest, UpdateAgentRequest, UpdateProxyRequest, UpdateUpstreamRequest,
     UpstreamView,
+};
+use crate::users::{
+    AuthContext, ChangePasswordRequest, CreateUserRequest, LoginRequest, LoginResponse,
+    SetDisabledRequest, UserError, UserInfo,
 };
 use crate::{agents::RegistryError, proxies::ProxyRegistryError, proxy::ProxyError, AppState};
 use axum::extract::{Path, Query, State};
@@ -17,6 +21,16 @@ use tower_http::services::{ServeDir, ServeFile};
 pub fn router() -> Router<AppState> {
     let api = Router::new()
         .route("/health", get(health))
+        .route("/api/v1/auth/login", post(login))
+        .route("/api/v1/auth/logout", post(logout))
+        .route("/api/v1/auth/me", get(auth_me))
+        .route("/api/v1/auth/change-password", post(change_password))
+        .route("/api/v1/users", get(list_users).post(create_user))
+        .route(
+            "/api/v1/users/{id}/disabled",
+            axum::routing::put(set_user_disabled),
+        )
+        .route("/api/v1/audit-logs", get(list_audit_logs))
         .route("/api/v1/agents", get(list_agents).post(register_agent))
         .route(
             "/api/v1/agents/{id}",
@@ -88,8 +102,217 @@ async fn health() -> Json<ApiResponse<HealthInfo>> {
     ))
 }
 
+fn audit(
+    state: &AppState,
+    ctx: &AuthContext,
+    action: &str,
+    resource_type: &str,
+    resource_id: &str,
+    detail: impl Into<String>,
+) {
+    if let Err(e) = state.audit.append(
+        ctx.user_id.as_deref(),
+        &ctx.username,
+        action,
+        resource_type,
+        resource_id,
+        detail,
+    ) {
+        tracing::warn!(error = %e, "audit append failed");
+    }
+}
+
+fn require_admin(auth: &AuthUser) -> Result<(), (StatusCode, Json<ApiResponse<()>>)> {
+    if auth.0.is_admin() {
+        Ok(())
+    } else {
+        Err((
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::<()>::err("admin role required")),
+        ))
+    }
+}
+
+fn user_err(e: UserError) -> (StatusCode, Json<ApiResponse<()>>) {
+    let status = match &e {
+        UserError::NotFound => StatusCode::NOT_FOUND,
+        UserError::Duplicate => StatusCode::CONFLICT,
+        UserError::InvalidCredentials => StatusCode::UNAUTHORIZED,
+        UserError::Disabled => StatusCode::FORBIDDEN,
+        UserError::Forbidden => StatusCode::FORBIDDEN,
+        UserError::Other(_) => StatusCode::BAD_REQUEST,
+        UserError::Db(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (status, Json(ApiResponse::<()>::err(e.to_string())))
+}
+
+#[derive(serde::Serialize)]
+struct MeView {
+    user_id: Option<String>,
+    username: String,
+    role: String,
+    is_service: bool,
+}
+
+async fn login(
+    State(state): State<AppState>,
+    Json(req): Json<LoginRequest>,
+) -> Result<Json<ApiResponse<LoginResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
+    match state.users.login(req) {
+        Ok(resp) => {
+            audit(
+                &state,
+                &AuthContext {
+                    user_id: Some(resp.user.id.clone()),
+                    username: resp.user.username.clone(),
+                    role: resp.user.role.clone(),
+                    is_service: false,
+                    session_token: None,
+                },
+                "auth.login",
+                "user",
+                &resp.user.id,
+                "login success",
+            );
+            Ok(Json(ApiResponse::ok("ok", resp)))
+        }
+        Err(e) => Err(user_err(e)),
+    }
+}
+
+async fn logout(
+    auth: AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<()>>, (StatusCode, Json<ApiResponse<()>>)> {
+    if let Some(token) = auth.0.session_token.as_deref() {
+        let _ = state.users.logout(token);
+    }
+    audit(&state, &auth.0, "auth.logout", "user", "", "logout");
+    Ok(Json(ApiResponse::ok("ok", ())))
+}
+
+async fn auth_me(auth: AuthUser) -> Json<ApiResponse<MeView>> {
+    Json(ApiResponse::ok(
+        "ok",
+        MeView {
+            user_id: auth.0.user_id.clone(),
+            username: auth.0.username.clone(),
+            role: auth.0.role.clone(),
+            is_service: auth.0.is_service,
+        },
+    ))
+}
+
+async fn change_password(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Json(req): Json<ChangePasswordRequest>,
+) -> Result<Json<ApiResponse<()>>, (StatusCode, Json<ApiResponse<()>>)> {
+    let Some(uid) = auth.0.user_id.as_deref() else {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<()>::err(
+                "service token cannot change password; use a user session",
+            )),
+        ));
+    };
+    state.users.change_password(uid, req).map_err(user_err)?;
+    audit(
+        &state,
+        &auth.0,
+        "auth.change_password",
+        "user",
+        uid,
+        "password changed",
+    );
+    Ok(Json(ApiResponse::ok("ok", ())))
+}
+
+async fn list_users(
+    auth: AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<Vec<UserInfo>>>, (StatusCode, Json<ApiResponse<()>>)> {
+    require_admin(&auth)?;
+    match state.users.list_users() {
+        Ok(list) => Ok(Json(ApiResponse::ok("ok", list))),
+        Err(e) => Err(user_err(e)),
+    }
+}
+
+async fn create_user(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Json(req): Json<CreateUserRequest>,
+) -> Result<Json<ApiResponse<UserInfo>>, (StatusCode, Json<ApiResponse<()>>)> {
+    require_admin(&auth)?;
+    let user = state.users.create_user(req).map_err(user_err)?;
+    audit(
+        &state,
+        &auth.0,
+        "user.create",
+        "user",
+        &user.id,
+        format!("created {}", user.username),
+    );
+    Ok(Json(ApiResponse::ok("created", user)))
+}
+
+async fn set_user_disabled(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<SetDisabledRequest>,
+) -> Result<Json<ApiResponse<UserInfo>>, (StatusCode, Json<ApiResponse<()>>)> {
+    require_admin(&auth)?;
+    if auth.0.user_id.as_deref() == Some(id.as_str()) && req.disabled {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<()>::err("cannot disable yourself")),
+        ));
+    }
+    let user = state.users.set_disabled(&id, req.disabled).map_err(user_err)?;
+    audit(
+        &state,
+        &auth.0,
+        if req.disabled {
+            "user.disable"
+        } else {
+            "user.enable"
+        },
+        "user",
+        &id,
+        format!("{} disabled={}", user.username, req.disabled),
+    );
+    Ok(Json(ApiResponse::ok("ok", user)))
+}
+
+#[derive(Debug, Deserialize)]
+struct AuditQuery {
+    #[serde(default = "default_audit_limit")]
+    limit: usize,
+}
+
+fn default_audit_limit() -> usize {
+    100
+}
+
+async fn list_audit_logs(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Query(q): Query<AuditQuery>,
+) -> Result<Json<ApiResponse<Vec<crate::audit::AuditEntry>>>, (StatusCode, Json<ApiResponse<()>>)> {
+    require_admin(&auth)?;
+    match state.audit.list(q.limit) {
+        Ok(list) => Ok(Json(ApiResponse::ok("ok", list))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<()>::err(e.to_string())),
+        )),
+    }
+}
+
 async fn list_agents(
-    _auth: AuthToken,
+    _auth: AuthUser,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<Vec<AgentInfo>>>, (StatusCode, Json<ApiResponse<()>>)> {
     match state.agents.list() {
@@ -99,7 +322,7 @@ async fn list_agents(
 }
 
 async fn get_agent(
-    _auth: AuthToken,
+    _auth: AuthUser,
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<AgentInfo>>, (StatusCode, Json<ApiResponse<()>>)> {
@@ -110,41 +333,50 @@ async fn get_agent(
 }
 
 async fn register_agent(
-    _auth: AuthToken,
+    auth: AuthUser,
     State(state): State<AppState>,
     Json(req): Json<RegisterAgentRequest>,
 ) -> Result<Json<ApiResponse<AgentInfo>>, (StatusCode, Json<ApiResponse<()>>)> {
     match state.agents.register(req) {
-        Ok(agent) => Ok(Json(ApiResponse::ok("registered", mask_token(agent)))),
+        Ok(agent) => {
+        audit(&state, &auth.0, "agent.register", "agent", &agent.id, &agent.name);
+        Ok(Json(ApiResponse::ok("registered", mask_token(agent))))
+    }
         Err(e) => Err(registry_err(e)),
     }
 }
 
 async fn update_agent(
-    _auth: AuthToken,
+    auth: AuthUser,
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(req): Json<UpdateAgentRequest>,
 ) -> Result<Json<ApiResponse<AgentInfo>>, (StatusCode, Json<ApiResponse<()>>)> {
     match state.agents.update(&id, req) {
-        Ok(agent) => Ok(Json(ApiResponse::ok("updated", mask_token(agent)))),
+        Ok(agent) => {
+        audit(&state, &auth.0, "agent.update", "agent", &agent.id, &agent.name);
+        Ok(Json(ApiResponse::ok("updated", mask_token(agent))))
+    }
         Err(e) => Err(registry_err(e)),
     }
 }
 
 async fn delete_agent(
-    _auth: AuthToken,
+    auth: AuthUser,
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<AgentInfo>>, (StatusCode, Json<ApiResponse<()>>)> {
     match state.agents.remove(&id) {
-        Ok(agent) => Ok(Json(ApiResponse::ok("deleted", mask_token(agent)))),
+        Ok(agent) => {
+        audit(&state, &auth.0, "agent.delete", "agent", &agent.id, &agent.name);
+        Ok(Json(ApiResponse::ok("deleted", mask_token(agent))))
+    }
         Err(e) => Err(registry_err(e)),
     }
 }
 
 async fn ping_agent(
-    _auth: AuthToken,
+    _auth: AuthUser,
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<AgentHealthView>>, (StatusCode, Json<ApiResponse<()>>)> {
@@ -172,7 +404,7 @@ async fn ping_agent(
 }
 
 async fn list_services(
-    _auth: AuthToken,
+    _auth: AuthUser,
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<Value>>, (StatusCode, Json<ApiResponse<()>>)> {
@@ -184,7 +416,7 @@ async fn list_services(
 }
 
 async fn start_service(
-    _auth: AuthToken,
+    auth: AuthUser,
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<StartServiceRequest>,
@@ -193,26 +425,32 @@ async fn start_service(
     match crate::proxy::agent_post_json(&state.http, &agent, "/api/v1/services/start", &body)
         .await
     {
-        Ok(v) => Ok(Json(ApiResponse::ok("ok", v))),
+        Ok(v) => {
+            audit(&state, &auth.0, "service.start", "agent", &id, format!("inline start {}", body.name));
+            Ok(Json(ApiResponse::ok("ok", v)))
+        },
         Err(e) => Err(proxy_err(e)),
     }
 }
 
 async fn save_service(
-    _auth: AuthToken,
+    auth: AuthUser,
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<StartServiceRequest>,
 ) -> Result<Json<ApiResponse<Value>>, (StatusCode, Json<ApiResponse<()>>)> {
     let agent = state.agents.get(&id).map_err(registry_err)?;
     match crate::proxy::agent_post_json(&state.http, &agent, "/api/v1/services", &body).await {
-        Ok(v) => Ok(Json(ApiResponse::ok("ok", v))),
+        Ok(v) => {
+            audit(&state, &auth.0, "service.save", "agent", &id, format!("save {}", body.name));
+            Ok(Json(ApiResponse::ok("ok", v)))
+        },
         Err(e) => Err(proxy_err(e)),
     }
 }
 
 async fn save_service_named(
-    _auth: AuthToken,
+    auth: AuthUser,
     State(state): State<AppState>,
     Path((id, name)): Path<(String, String)>,
     Json(mut body): Json<StartServiceRequest>,
@@ -221,13 +459,16 @@ async fn save_service_named(
     let agent = state.agents.get(&id).map_err(registry_err)?;
     let path = format!("/api/v1/services/{name}");
     match crate::proxy::agent_put_json(&state.http, &agent, &path, &body).await {
-        Ok(v) => Ok(Json(ApiResponse::ok("ok", v))),
+        Ok(v) => {
+            audit(&state, &auth.0, "service.save", "agent", &id, format!("save {name}"));
+            Ok(Json(ApiResponse::ok("ok", v)))
+        },
         Err(e) => Err(proxy_err(e)),
     }
 }
 
 async fn get_service_spec(
-    _auth: AuthToken,
+    _auth: AuthUser,
     State(state): State<AppState>,
     Path((id, name)): Path<(String, String)>,
 ) -> Result<Json<ApiResponse<Value>>, (StatusCode, Json<ApiResponse<()>>)> {
@@ -240,46 +481,55 @@ async fn get_service_spec(
 }
 
 async fn start_saved_service(
-    _auth: AuthToken,
+    auth: AuthUser,
     State(state): State<AppState>,
     Path((id, name)): Path<(String, String)>,
 ) -> Result<Json<ApiResponse<Value>>, (StatusCode, Json<ApiResponse<()>>)> {
     let agent = state.agents.get(&id).map_err(registry_err)?;
     let path = format!("/api/v1/services/{name}/start");
     match crate::proxy::agent_post_empty(&state.http, &agent, &path).await {
-        Ok(v) => Ok(Json(ApiResponse::ok("ok", v))),
+        Ok(v) => {
+            audit(&state, &auth.0, "service.start", "agent", &id, format!("start {name}"));
+            Ok(Json(ApiResponse::ok("ok", v)))
+        },
         Err(e) => Err(proxy_err(e)),
     }
 }
 
 async fn restart_service(
-    _auth: AuthToken,
+    auth: AuthUser,
     State(state): State<AppState>,
     Path((id, name)): Path<(String, String)>,
 ) -> Result<Json<ApiResponse<Value>>, (StatusCode, Json<ApiResponse<()>>)> {
     let agent = state.agents.get(&id).map_err(registry_err)?;
     let path = format!("/api/v1/services/{name}/restart");
     match crate::proxy::agent_post_empty(&state.http, &agent, &path).await {
-        Ok(v) => Ok(Json(ApiResponse::ok("ok", v))),
+        Ok(v) => {
+            audit(&state, &auth.0, "service.restart", "agent", &id, format!("restart {name}"));
+            Ok(Json(ApiResponse::ok("ok", v)))
+        },
         Err(e) => Err(proxy_err(e)),
     }
 }
 
 async fn remove_service(
-    _auth: AuthToken,
+    auth: AuthUser,
     State(state): State<AppState>,
     Path((id, name)): Path<(String, String)>,
 ) -> Result<Json<ApiResponse<Value>>, (StatusCode, Json<ApiResponse<()>>)> {
     let agent = state.agents.get(&id).map_err(registry_err)?;
     let path = format!("/api/v1/services/{name}");
     match crate::proxy::agent_delete(&state.http, &agent, &path).await {
-        Ok(v) => Ok(Json(ApiResponse::ok("ok", v))),
+        Ok(v) => {
+            audit(&state, &auth.0, "service.delete", "agent", &id, format!("delete {name}"));
+            Ok(Json(ApiResponse::ok("ok", v)))
+        },
         Err(e) => Err(proxy_err(e)),
     }
 }
 
 async fn service_status(
-    _auth: AuthToken,
+    _auth: AuthUser,
     State(state): State<AppState>,
     Path((id, name)): Path<(String, String)>,
 ) -> Result<Json<ApiResponse<Value>>, (StatusCode, Json<ApiResponse<()>>)> {
@@ -292,14 +542,17 @@ async fn service_status(
 }
 
 async fn stop_service(
-    _auth: AuthToken,
+    auth: AuthUser,
     State(state): State<AppState>,
     Path((id, name)): Path<(String, String)>,
 ) -> Result<Json<ApiResponse<Value>>, (StatusCode, Json<ApiResponse<()>>)> {
     let agent = state.agents.get(&id).map_err(registry_err)?;
     let path = format!("/api/v1/services/{name}/stop");
     match crate::proxy::agent_post_empty(&state.http, &agent, &path).await {
-        Ok(v) => Ok(Json(ApiResponse::ok("ok", v))),
+        Ok(v) => {
+            audit(&state, &auth.0, "service.stop", "agent", &id, format!("stop {name}"));
+            Ok(Json(ApiResponse::ok("ok", v)))
+        },
         Err(e) => Err(proxy_err(e)),
     }
 }
@@ -315,7 +568,7 @@ fn default_log_bytes() -> u64 {
 }
 
 async fn service_logs(
-    _auth: AuthToken,
+    _auth: AuthUser,
     State(state): State<AppState>,
     Path((id, name)): Path<(String, String)>,
     Query(q): Query<LogQuery>,
@@ -329,7 +582,7 @@ async fn service_logs(
 }
 
 async fn list_proxies(
-    _auth: AuthToken,
+    _auth: AuthUser,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<Vec<ProxyInfo>>>, (StatusCode, Json<ApiResponse<()>>)> {
     match state.proxies.list() {
@@ -339,7 +592,7 @@ async fn list_proxies(
 }
 
 async fn get_proxy(
-    _auth: AuthToken,
+    _auth: AuthUser,
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<ProxyInfo>>, (StatusCode, Json<ApiResponse<()>>)> {
@@ -350,35 +603,44 @@ async fn get_proxy(
 }
 
 async fn register_proxy(
-    _auth: AuthToken,
+    auth: AuthUser,
     State(state): State<AppState>,
     Json(req): Json<RegisterProxyRequest>,
 ) -> Result<Json<ApiResponse<ProxyInfo>>, (StatusCode, Json<ApiResponse<()>>)> {
     match state.proxies.register(req) {
-        Ok(p) => Ok(Json(ApiResponse::ok("registered", mask_proxy_token(p)))),
+        Ok(p) => {
+        audit(&state, &auth.0, "proxy.register", "proxy", &p.id, &p.name);
+        Ok(Json(ApiResponse::ok("registered", mask_proxy_token(p))))
+    }
         Err(e) => Err(proxy_registry_err(e)),
     }
 }
 
 async fn update_proxy(
-    _auth: AuthToken,
+    auth: AuthUser,
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(req): Json<UpdateProxyRequest>,
 ) -> Result<Json<ApiResponse<ProxyInfo>>, (StatusCode, Json<ApiResponse<()>>)> {
     match state.proxies.update(&id, req) {
-        Ok(p) => Ok(Json(ApiResponse::ok("updated", mask_proxy_token(p)))),
+        Ok(p) => {
+        audit(&state, &auth.0, "proxy.update", "proxy", &p.id, &p.name);
+        Ok(Json(ApiResponse::ok("updated", mask_proxy_token(p))))
+    }
         Err(e) => Err(proxy_registry_err(e)),
     }
 }
 
 async fn delete_proxy(
-    _auth: AuthToken,
+    auth: AuthUser,
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<ProxyInfo>>, (StatusCode, Json<ApiResponse<()>>)> {
     match state.proxies.remove(&id) {
-        Ok(p) => Ok(Json(ApiResponse::ok("deleted", mask_proxy_token(p)))),
+        Ok(p) => {
+        audit(&state, &auth.0, "proxy.delete", "proxy", &p.id, &p.name);
+        Ok(Json(ApiResponse::ok("deleted", mask_proxy_token(p))))
+    }
         Err(e) => Err(proxy_registry_err(e)),
     }
 }
@@ -397,7 +659,7 @@ fn proxy_as_agent(p: &ProxyInfo) -> AgentInfo {
 }
 
 async fn ping_proxy(
-    _auth: AuthToken,
+    _auth: AuthUser,
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<ProxyHealthView>>, (StatusCode, Json<ApiResponse<()>>)> {
@@ -426,7 +688,7 @@ async fn ping_proxy(
 }
 
 async fn list_proxy_upstreams(
-    _auth: AuthToken,
+    _auth: AuthUser,
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<Vec<UpstreamView>>>, (StatusCode, Json<ApiResponse<()>>)> {
@@ -445,7 +707,7 @@ async fn list_proxy_upstreams(
 }
 
 async fn create_proxy_upstream(
-    _auth: AuthToken,
+    auth: AuthUser,
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<CreateUpstreamRequest>,
@@ -461,11 +723,19 @@ async fn create_proxy_upstream(
             Json(ApiResponse::<()>::err(e)),
         )
     })?;
+    audit(
+        &state,
+        &auth.0,
+        "upstream.create",
+        "proxy",
+        &id,
+        format!("create {}", body.id),
+    );
     Ok(Json(ApiResponse::ok("created", view)))
 }
 
 async fn update_proxy_upstream(
-    _auth: AuthToken,
+    auth: AuthUser,
     State(state): State<AppState>,
     Path((id, upstream_id)): Path<(String, String)>,
     Json(body): Json<UpdateUpstreamRequest>,
@@ -482,11 +752,19 @@ async fn update_proxy_upstream(
             Json(ApiResponse::<()>::err(e)),
         )
     })?;
+    audit(
+        &state,
+        &auth.0,
+        "upstream.update",
+        "proxy",
+        &id,
+        format!("update {upstream_id}"),
+    );
     Ok(Json(ApiResponse::ok("updated", view)))
 }
 
 async fn delete_proxy_upstream(
-    _auth: AuthToken,
+    auth: AuthUser,
     State(state): State<AppState>,
     Path((id, upstream_id)): Path<(String, String)>,
 ) -> Result<Json<ApiResponse<UpstreamView>>, (StatusCode, Json<ApiResponse<()>>)> {
@@ -502,11 +780,19 @@ async fn delete_proxy_upstream(
             Json(ApiResponse::<()>::err(e)),
         )
     })?;
+    audit(
+        &state,
+        &auth.0,
+        "upstream.delete",
+        "proxy",
+        &id,
+        format!("delete {upstream_id}"),
+    );
     Ok(Json(ApiResponse::ok("deleted", view)))
 }
 
 async fn import_upstream(
-    _auth: AuthToken,
+    auth: AuthUser,
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(req): Json<ImportUpstreamRequest>,
@@ -564,7 +850,10 @@ async fn import_upstream(
     };
 
     match state.agents.register(agent_req) {
-        Ok(agent) => Ok(Json(ApiResponse::ok("imported", mask_token(agent)))),
+        Ok(agent) => {
+        audit(&state, &auth.0, "agent.import", "agent", &agent.id, format!("via proxy {id}"));
+        Ok(Json(ApiResponse::ok("imported", mask_token(agent))))
+    }
         Err(e) => Err(registry_err(e)),
     }
 }
@@ -634,32 +923,29 @@ fn proxy_err(e: ProxyError) -> (StatusCode, Json<ApiResponse<()>>) {
         ProxyError::AgentStatus { status, body } => {
             let code = StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
             let hint = match status.as_u16() {
-                401 | 403 => "认证失败：Token 可能不正确",
-                404 => "目标不存在：检查 Agent/Proxy 路径或上游 id",
-                409 => "冲突：资源状态不允许该操作",
-                502 | 503 | 504 => "下游不可用：经 Proxy 转发失败或 Agent 无响应",
-                _ => "目标返回错误",
+                401 | 403 => "?????Token ?????",
+                404 => "???????? Agent/Proxy ????? id",
+                409 => "?????????????",
+                502 | 503 | 504 => "??????? Proxy ????? Agent ???",
+                _ => "??????",
             };
             let body = body.trim();
             let detail = if body.is_empty() {
                 String::new()
             } else if body.len() > 240 {
-                format!(" — {}…", &body[..240])
+                format!(" ? {}?", &body[..240])
             } else {
-                format!(" — {body}")
+                format!(" ? {body}")
             };
-            (
-                code,
-                format!("{hint}（HTTP {status}）{detail}"),
-            )
+            (code, format!("{hint}?HTTP {status}?{detail}"))
         }
         ProxyError::Http(err) => {
             let msg = if err.is_timeout() {
-                format!("请求超时：目标无响应或网络过慢（{err}）")
+                format!("????????????????{err}?")
             } else if err.is_connect() {
-                format!("无法连接 Agent/Proxy：检查地址、防火墙与进程是否启动（{err}）")
+                format!("???? Agent/Proxy?????????????????{err}?")
             } else {
-                format!("转发请求失败：{err}")
+                format!("???????{err}")
             };
             (StatusCode::BAD_GATEWAY, msg)
         }

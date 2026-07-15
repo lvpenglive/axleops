@@ -7,10 +7,15 @@ use std::path::PathBuf;
 pub struct Config {
     /// Listen address, e.g. 0.0.0.0:9000
     pub bind: String,
-    /// Shared secret; clients must send header X-AxleOps-Token
+    /// Legacy / service bootstrap token (`X-AxleOps-Token`). Still accepted for automation.
     pub token: String,
-    /// Where agent registry JSON is stored
+    /// Where SQLite and runtime data live
     pub data_dir: PathBuf,
+    /// Created on first boot when users table is empty
+    pub seed_username: String,
+    pub seed_password: String,
+    /// Session lifetime for username/password login
+    pub session_ttl_hours: u64,
 }
 
 impl Default for Config {
@@ -19,6 +24,9 @@ impl Default for Config {
             bind: "0.0.0.0:9000".into(),
             token: "change-me-to-a-long-secret".into(),
             data_dir: PathBuf::from("./data"),
+            seed_username: "admin".into(),
+            seed_password: "change-me-admin".into(),
+            session_ttl_hours: 24,
         }
     }
 }
@@ -39,6 +47,17 @@ impl Config {
         }
         if let Ok(v) = std::env::var("AXLEOPS_ADMIN_DATA_DIR") {
             cfg.data_dir = PathBuf::from(v);
+        }
+        if let Ok(v) = std::env::var("AXLEOPS_ADMIN_SEED_USERNAME") {
+            cfg.seed_username = v;
+        }
+        if let Ok(v) = std::env::var("AXLEOPS_ADMIN_SEED_PASSWORD") {
+            cfg.seed_password = v;
+        }
+        if let Ok(v) = std::env::var("AXLEOPS_ADMIN_SESSION_TTL_HOURS") {
+            if let Ok(n) = v.parse() {
+                cfg.session_ttl_hours = n;
+            }
         }
 
         fs::create_dir_all(&cfg.data_dir)?;

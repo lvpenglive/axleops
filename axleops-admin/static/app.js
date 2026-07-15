@@ -1,19 +1,41 @@
 (() => {
-  const TOKEN_KEY = "axleops_admin_token";
+  const SESSION_KEY = "axleops_admin_session";
+  const USER_KEY = "axleops_admin_user";
 
   const els = {
     viewLogin: document.getElementById("view-login"),
     viewApp: document.getElementById("view-app"),
     formLogin: document.getElementById("form-login"),
-    loginToken: document.getElementById("login-token"),
+    loginUsername: document.getElementById("login-username"),
+    loginPassword: document.getElementById("login-password"),
     loginError: document.getElementById("login-error"),
     btnRefresh: document.getElementById("btn-refresh"),
     btnLogout: document.getElementById("btn-logout"),
+    btnPassword: document.getElementById("btn-password"),
+    currentUser: document.getElementById("current-user"),
     btnToggleToken: document.getElementById("btn-toggle-token"),
     tabAgents: document.getElementById("tab-agents"),
     tabProxies: document.getElementById("tab-proxies"),
+    tabSystem: document.getElementById("tab-system"),
     railAgents: document.getElementById("rail-agents"),
     railProxies: document.getElementById("rail-proxies"),
+    railSystem: document.getElementById("rail-system"),
+    btnShowUsers: document.getElementById("btn-show-users"),
+    btnShowAudit: document.getElementById("btn-show-audit"),
+    panelPassword: document.getElementById("panel-password"),
+    panelUsers: document.getElementById("panel-users"),
+    panelAudit: document.getElementById("panel-audit"),
+    formPassword: document.getElementById("form-password"),
+    passwordError: document.getElementById("password-error"),
+    btnCancelPassword: document.getElementById("btn-cancel-password"),
+    formCreateUser: document.getElementById("form-create-user"),
+    usersError: document.getElementById("users-error"),
+    userList: document.getElementById("user-list"),
+    btnCancelUsers: document.getElementById("btn-cancel-users"),
+    auditList: document.getElementById("audit-list"),
+    auditEmpty: document.getElementById("audit-empty"),
+    btnReloadAudit: document.getElementById("btn-reload-audit"),
+    btnCancelAudit: document.getElementById("btn-cancel-audit"),
     agentList: document.getElementById("agent-list"),
     agentEmpty: document.getElementById("agent-empty"),
     proxyList: document.getElementById("proxy-list"),
@@ -94,6 +116,7 @@
 
   const state = {
     rail: "agents",
+    me: null,
     agents: [],
     proxies: [],
     upstreams: [],
@@ -110,15 +133,16 @@
   };
 
   function getToken() {
-    return sessionStorage.getItem(TOKEN_KEY) || "";
+    return sessionStorage.getItem(SESSION_KEY) || "";
   }
 
   function setToken(token) {
-    sessionStorage.setItem(TOKEN_KEY, token);
+    sessionStorage.setItem(SESSION_KEY, token);
   }
 
   function clearToken() {
-    sessionStorage.removeItem(TOKEN_KEY);
+    sessionStorage.removeItem(SESSION_KEY);
+    sessionStorage.removeItem(USER_KEY);
   }
 
   function showToast(message, isError = false) {
@@ -159,7 +183,7 @@
     const headers = Object.assign(
       { "Content-Type": "application/json" },
       options.headers || {},
-      { "X-AxleOps-Token": getToken() }
+      { "X-AxleOps-Session": getToken() }
     );
     const res = await fetch(path, { ...options, headers });
     let body = null;
@@ -172,7 +196,7 @@
       }
     }
     if (res.status === 401) {
-      throw new Error(friendlyError("Token 无效或未授权"));
+      throw new Error(friendlyError("会话无效或未授权"));
     }
     if (!res.ok) {
       const msg = (body && body.message) || `HTTP ${res.status}`;
@@ -299,14 +323,19 @@
     els.panelRegister.classList.add("hidden");
     els.panelProxyRegister.classList.add("hidden");
     els.panelProxyDetail.classList.add("hidden");
+    if (els.panelPassword) els.panelPassword.classList.add("hidden");
+    if (els.panelUsers) els.panelUsers.classList.add("hidden");
+    if (els.panelAudit) els.panelAudit.classList.add("hidden");
   }
 
   function setRail(rail) {
     state.rail = rail;
     els.tabAgents.classList.toggle("active", rail === "agents");
     els.tabProxies.classList.toggle("active", rail === "proxies");
+    if (els.tabSystem) els.tabSystem.classList.toggle("active", rail === "system");
     els.railAgents.classList.toggle("hidden", rail !== "agents");
     els.railProxies.classList.toggle("hidden", rail !== "proxies");
+    if (els.railSystem) els.railSystem.classList.toggle("hidden", rail !== "system");
   }
 
   function showWelcome() {
@@ -1367,15 +1396,105 @@
     }
   }
 
-  async function verifyToken(token) {
-    const res = await fetch("/api/v1/agents", {
-      headers: { "X-AxleOps-Token": token },
+  function applyMe(me) {
+    state.me = me;
+    if (els.currentUser) {
+      els.currentUser.textContent = me ? `${me.username} · ${me.role}` : "";
+      els.currentUser.hidden = !me;
+    }
+    if (els.btnPassword) {
+      els.btnPassword.hidden = !me || me.is_service || !me.user_id;
+    }
+    if (els.tabSystem) {
+      const isAdmin = me && (me.role === "admin" || me.is_service);
+      els.tabSystem.classList.toggle("hidden", !isAdmin);
+    }
+  }
+
+  async function verifySession(token) {
+    const res = await fetch("/api/v1/auth/me", {
+      headers: { "X-AxleOps-Session": token },
     });
-    if (res.status === 401) throw new Error("Token 无效");
+    if (res.status === 401) throw new Error("会话无效或已过期");
     if (!res.ok) {
       const text = await res.text();
       throw new Error(text || `HTTP ${res.status}`);
     }
+    const body = await res.json();
+    const me = body.data || body;
+    applyMe(me);
+    return me;
+  }
+
+  async function loadUsers() {
+    const res = await api("/api/v1/users");
+    const list = res.data || [];
+    els.userList.innerHTML = "";
+    list.forEach((u) => {
+      const row = document.createElement("div");
+      row.className = "service-item";
+      const disabled = !!u.disabled;
+      row.innerHTML = `
+        <div class="service-main">
+          <div class="service-name">${u.username}</div>
+          <div class="service-meta muted">${u.role}${disabled ? " · 已禁用" : ""}</div>
+        </div>
+        <div class="service-actions">
+          <button type="button" class="btn small" data-act="toggle">${disabled ? "启用" : "禁用"}</button>
+        </div>`;
+      row.querySelector("[data-act=toggle]").addEventListener("click", async () => {
+        try {
+          await api(`/api/v1/users/${encodeURIComponent(u.id)}/disabled`, {
+            method: "PUT",
+            body: JSON.stringify({ disabled: !disabled }),
+          });
+          showToast(disabled ? "已启用" : "已禁用");
+          await loadUsers();
+        } catch (e) {
+          showToast(e.message, true);
+        }
+      });
+      els.userList.appendChild(row);
+    });
+  }
+
+  async function loadAudit() {
+    const res = await api("/api/v1/audit-logs?limit=100");
+    const list = res.data || [];
+    els.auditList.innerHTML = "";
+    els.auditEmpty.hidden = list.length > 0;
+    list.forEach((a) => {
+      const row = document.createElement("div");
+      row.className = "service-item";
+      row.innerHTML = `
+        <div class="service-main">
+          <div class="service-name">${a.action}</div>
+          <div class="service-meta muted">${a.username} · ${a.resource_type} ${a.resource_id || ""} · ${a.detail || ""}</div>
+          <div class="service-meta muted mono">${a.created_at || ""}</div>
+        </div>`;
+      els.auditList.appendChild(row);
+    });
+  }
+
+  function showPassword() {
+    hideMainPanels();
+    els.panelPassword.classList.remove("hidden");
+    els.passwordError.hidden = true;
+  }
+
+  function showUsers() {
+    setRail("system");
+    hideMainPanels();
+    els.panelUsers.classList.remove("hidden");
+    els.usersError.hidden = true;
+    loadUsers().catch((e) => showToast(e.message, true));
+  }
+
+  function showAudit() {
+    setRail("system");
+    hideMainPanels();
+    els.panelAudit.classList.remove("hidden");
+    loadAudit().catch((e) => showToast(e.message, true));
   }
 
   async function refreshAll() {
@@ -1384,10 +1503,10 @@
   }
 
   // Events
-  if (els.btnToggleToken) {
+  if (els.btnToggleToken && els.loginPassword) {
     els.btnToggleToken.addEventListener("click", () => {
-      const show = els.loginToken.type === "password";
-      els.loginToken.type = show ? "text" : "password";
+      const show = els.loginPassword.type === "password";
+      els.loginPassword.type = show ? "text" : "password";
       els.btnToggleToken.textContent = show ? "隐藏" : "显示";
       els.btnToggleToken.setAttribute("aria-pressed", show ? "true" : "false");
     });
@@ -1396,10 +1515,26 @@
   els.formLogin.addEventListener("submit", async (ev) => {
     ev.preventDefault();
     els.loginError.hidden = true;
-    const token = els.loginToken.value.trim();
+    const username = (els.loginUsername.value || "").trim();
+    const password = els.loginPassword.value || "";
     try {
-      await verifyToken(token);
-      setToken(token);
+      const res = await fetch("/api/v1/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body.ok) {
+        throw new Error((body && body.message) || "登录失败");
+      }
+      const data = body.data;
+      setToken(data.token);
+      applyMe({
+        user_id: data.user.id,
+        username: data.user.username,
+        role: data.user.role,
+        is_service: false,
+      });
       showApp();
       await refreshAll();
       startOnlinePoll();
@@ -1410,12 +1545,86 @@
     }
   });
 
-  els.btnLogout.addEventListener("click", () => {
+  els.btnLogout.addEventListener("click", async () => {
+    try {
+      await api("/api/v1/auth/logout", { method: "POST", body: "{}" });
+    } catch (_) {
+      /* ignore */
+    }
     stopOnlinePoll();
     stopLogPoll();
     clearToken();
+    applyMe(null);
     showLogin();
   });
+
+  if (els.btnPassword) {
+    els.btnPassword.addEventListener("click", showPassword);
+  }
+  if (els.btnCancelPassword) {
+    els.btnCancelPassword.addEventListener("click", showWelcome);
+  }
+  if (els.formPassword) {
+    els.formPassword.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      els.passwordError.hidden = true;
+      const fd = new FormData(els.formPassword);
+      try {
+        await api("/api/v1/auth/change-password", {
+          method: "POST",
+          body: JSON.stringify({
+            old_password: String(fd.get("old_password") || ""),
+            new_password: String(fd.get("new_password") || ""),
+          }),
+        });
+        clearToken();
+        applyMe(null);
+        showLogin();
+        showToast("密码已更新，请重新登录");
+      } catch (e) {
+        els.passwordError.textContent = e.message;
+        els.passwordError.hidden = false;
+      }
+    });
+  }
+  if (els.tabSystem) {
+    els.tabSystem.addEventListener("click", () => {
+      setRail("system");
+      showUsers();
+    });
+  }
+  if (els.btnShowUsers) els.btnShowUsers.addEventListener("click", showUsers);
+  if (els.btnShowAudit) els.btnShowAudit.addEventListener("click", showAudit);
+  if (els.btnCancelUsers) els.btnCancelUsers.addEventListener("click", showWelcome);
+  if (els.btnCancelAudit) els.btnCancelAudit.addEventListener("click", showWelcome);
+  if (els.btnReloadAudit) {
+    els.btnReloadAudit.addEventListener("click", () => {
+      loadAudit().catch((e) => showToast(e.message, true));
+    });
+  }
+  if (els.formCreateUser) {
+    els.formCreateUser.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      els.usersError.hidden = true;
+      const fd = new FormData(els.formCreateUser);
+      try {
+        await api("/api/v1/users", {
+          method: "POST",
+          body: JSON.stringify({
+            username: String(fd.get("username") || "").trim(),
+            password: String(fd.get("password") || ""),
+            role: String(fd.get("role") || "operator"),
+          }),
+        });
+        els.formCreateUser.reset();
+        showToast("用户已创建");
+        await loadUsers();
+      } catch (e) {
+        els.usersError.textContent = e.message;
+        els.usersError.hidden = false;
+      }
+    });
+  }
 
   els.btnRefresh.addEventListener("click", async () => {
     try {
@@ -1677,7 +1886,7 @@
       return;
     }
     try {
-      await verifyToken(token);
+      await verifySession(token);
       showApp();
       await refreshAll();
       startOnlinePoll();

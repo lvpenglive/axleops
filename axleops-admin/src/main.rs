@@ -1,24 +1,30 @@
 mod agents;
+mod audit;
 mod auth;
 mod config;
 mod models;
 mod proxies;
 mod proxy;
 mod routes;
+mod users;
 
 use agents::AgentRegistry;
+use audit::AuditStore;
 use config::Config;
 use proxies::ProxyRegistry;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
+use users::UserStore;
 
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<Config>,
     pub agents: Arc<AgentRegistry>,
     pub proxies: Arc<ProxyRegistry>,
+    pub users: Arc<UserStore>,
+    pub audit: Arc<AuditStore>,
     pub http: reqwest::Client,
 }
 
@@ -37,7 +43,10 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let agents = AgentRegistry::load(&config.data_dir)?;
-    let proxies = ProxyRegistry::open(agents.db_path())?;
+    let db_path = agents.db_path().to_path_buf();
+    let proxies = ProxyRegistry::open(&db_path)?;
+    let users = UserStore::open(&db_path, &config)?;
+    let audit = AuditStore::open(&db_path)?;
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()?;
@@ -45,6 +54,8 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState {
         agents: Arc::new(agents),
         proxies: Arc::new(proxies),
+        users: Arc::new(users),
+        audit: Arc::new(audit),
         config: Arc::new(config),
         http,
     };

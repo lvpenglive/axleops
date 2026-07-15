@@ -7,6 +7,7 @@ mod routes;
 use config::Config;
 use process::ProcessManager;
 use std::sync::Arc;
+use std::time::Duration;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
@@ -27,11 +28,34 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(
         bind = %bind,
         data_dir = %config.data_dir.display(),
+        watchdog = config.watchdog_enabled,
         "starting axleops-agent"
     );
 
+    let processes = Arc::new(ProcessManager::new(config.data_dir.clone()));
+    processes.recover_desired();
+
+    if config.watchdog_enabled {
+        let interval = Duration::from_secs(config.watchdog_interval_secs.max(5));
+        let wd = processes.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                ticker.tick().await;
+                let mgr = wd.clone();
+                // Offload blocking process status / spawn to blocking pool.
+                let _ = tokio::task::spawn_blocking(move || mgr.watchdog_tick()).await;
+            }
+        });
+        tracing::info!(
+            interval_secs = interval.as_secs(),
+            "watchdog enabled"
+        );
+    }
+
     let state = AppState {
-        processes: Arc::new(ProcessManager::new(config.data_dir.clone())),
+        processes,
         config: Arc::new(config),
     };
 

@@ -47,15 +47,17 @@ Admin 控制台左侧可切换 **Agents / Proxies**：登记多个 Proxy 后 Pin
 
 ### v0.3 — 可靠与安全
 
-- **用户名 / 密码登录**（会话鉴权，替代整站共用 Admin Token 登录）
-- **改密**；超管可创建 / 禁用用户（种子管理员可从配置引导）
-- **操作审计**：绑定用户（谁、何时、对哪台 Agent/Proxy 做了启停 / 导入等）
+- ~~**用户名 / 密码登录**（会话鉴权，替代整站共用 Admin Token 登录）~~
+- ~~**改密**；超管可创建 / 禁用用户（种子管理员可从配置引导）~~
+- ~~**操作审计**：绑定用户（谁、何时、对哪台 Agent/Proxy 做了启停 / 导入等）~~
 - Agent / Proxy 侧 Token 轮换、可选按 Agent 独立 token（机器信任与用户会话分离）
 - 生产绑定与 CORS 策略
 - 跨 Agent 服务状态总览
-- Agent 重启后按规格拉起「应运行」服务
-- **业务进程崩溃自动拉起**（Agent 侧看门狗：探测 PID/探活失败后按规格重启，可配置重试上限与间隔）
+- ~~Agent 重启后按规格拉起「应运行」服务~~
+- ~~**业务进程崩溃自动拉起**（Agent 侧看门狗：PID 消失后按规格拉起，可配置间隔；探活 Unhealthy 暂不自动杀进程以免抖动）~~
 - 基础自动化测试（进程生命周期 + 代理冒烟）
+
+已落地补充：Admin 仍接受 `X-AxleOps-Token` 作为自动化服务令牌；浏览器走会话（`X-AxleOps-Session` / Bearer）。
 
 ### v0.4 — 交付与部署增强
 
@@ -88,7 +90,7 @@ git clone https://github.com/lvpenglive/axleops.git
 cd axleops
 ```
 
-### 2. 配置（务必修改 Token）
+### 2. 配置（务必修改默认口令 / Token）
 
 本地 `config.toml` **不入库**，从示例复制：
 
@@ -103,9 +105,11 @@ cp config.example.toml config.toml
 bind = "0.0.0.0:9100"
 token = "改成足够长的随机密钥"   # 请求头 X-AxleOps-Token
 data_dir = "./data"
+watchdog_enabled = true
+watchdog_interval_secs = 15
 ```
 
-环境变量覆盖（可选）：`AXLEOPS_BIND` / `AXLEOPS_TOKEN` / `AXLEOPS_DATA_DIR`
+环境变量覆盖（可选）：`AXLEOPS_BIND` / `AXLEOPS_TOKEN` / `AXLEOPS_DATA_DIR` / `AXLEOPS_WATCHDOG_*`
 
 **Admin（一台控制机）：**
 
@@ -116,13 +120,16 @@ cp config.example.toml config.toml
 
 ```toml
 bind = "0.0.0.0:9000"
-token = "改成足够长的随机密钥"   # Web 登录与 API 使用同一 Token
+token = "改成足够长的随机密钥"   # 自动化 / 服务令牌（X-AxleOps-Token），非浏览器登录
 data_dir = "./data"
+seed_username = "admin"
+seed_password = "改成强密码"      # 首次空库自动创建该管理员
+session_ttl_hours = 24
 ```
 
-环境变量覆盖（可选）：`AXLEOPS_ADMIN_BIND` / `AXLEOPS_ADMIN_TOKEN` / `AXLEOPS_ADMIN_DATA_DIR`
+环境变量覆盖（可选）：`AXLEOPS_ADMIN_BIND` / `AXLEOPS_ADMIN_TOKEN` / `AXLEOPS_ADMIN_DATA_DIR` / `AXLEOPS_ADMIN_SEED_*` / `AXLEOPS_ADMIN_SESSION_TTL_HOURS`
 
-> Admin Token 与 Agent Token 各自独立。直连时，注册 Agent 填该 Agent 的 `base_url` 与其 Token。
+> 浏览器用用户名密码登录；Admin `token` 与 Agent Token 各自独立。直连时，注册 Agent 填该 Agent 的 `base_url` 与其 Token。
 
 **Proxy（可选，边界 / 二级机）：**
 
@@ -177,7 +184,7 @@ cd axleops-admin && cargo run
 可先：`curl -H "X-AxleOps-Token: <proxy-token>" http://127.0.0.1:9200/api/v1/upstreams`
 
 1. 浏览器打开 http://127.0.0.1:9000/
-2. 使用 Admin `token` 登录
+2. 使用 `seed_username` / `seed_password`（或已创建用户）登录
 3. 按上表注册 Agent（直连或 Proxy 前缀）
 4. 保存服务规格后启停 / 日志 / 探活
 
@@ -275,7 +282,7 @@ curl -H "X-AxleOps-Token: <proxy-token>" http://<proxy-host>:9200/api/v1/upstrea
 | 组件 | 配置文件 | 默认端口 | 认证头 |
 |------|----------|----------|--------|
 | Agent | `axleops-agent/config.toml` | 9100 | `X-AxleOps-Token` |
-| Admin | `axleops-admin/config.toml` | 9000 | `X-AxleOps-Token`（登录与 API） |
+| Admin | `axleops-admin/config.toml` | 9000 | 浏览器：`X-AxleOps-Session`；自动化：`X-AxleOps-Token` |
 | Proxy | `axleops-proxy/config.toml` | 9200 | Admin→Proxy 用 Proxy token；Proxy→Agent 用各上游 token |
 
 Agent / Admin 数据目录默认 `./data`（相对进程工作目录）。Proxy 上游表默认 `./data/upstreams.json`（管理页可改；`config.toml` 的 `[[agents]]` 仅首次种子）。

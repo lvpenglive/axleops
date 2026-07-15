@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/app.css?v=20260715k" />
+  <link rel="stylesheet" href="/app.css?v=20260715v03" />
 </head>
 <body>
   <div class="bg-grid" aria-hidden="true"></div>
@@ -36,14 +36,16 @@
           </div>
         </div>
         <h1>进入控制台</h1>
-        <p class="muted login-lead">使用 Admin 配置中的 Token 鉴权。该密钥只在本机会话保存，关闭标签页后需重新输入。</p>
+        <p class="muted login-lead">使用管理员用户名与密码登录。会话只保存在本标签页，关闭后需重新登录。</p>
         <form id="form-login" class="login-form">
-          <label for="login-token">Admin Token</label>
+          <label for="login-username">用户名</label>
+          <input id="login-username" type="text" autocomplete="username" required placeholder="admin" />
+          <label for="login-password">密码</label>
           <div class="token-field">
-            <input id="login-token" type="password" autocomplete="current-password" required placeholder="config.toml → token" />
+            <input id="login-password" type="password" autocomplete="current-password" required placeholder="密码" />
             <button type="button" id="btn-toggle-token" class="btn ghost small token-toggle" aria-pressed="false">显示</button>
           </div>
-          <p class="login-hint mono">请求头 · X-AxleOps-Token</p>
+          <p class="login-hint mono">首次启动默认账号见 config.toml · seed_username / seed_password</p>
           <button type="submit" class="btn primary login-submit">进入控制台</button>
           <p id="login-error" class="error" hidden></p>
         </form>
@@ -62,6 +64,8 @@
         <span class="badge">Admin</span>
       </div>
       <div class="topbar-actions">
+        <span id="current-user" class="topbar-user muted" hidden></span>
+        <button type="button" id="btn-password" class="btn ghost" hidden>改密</button>
         <button type="button" id="btn-refresh" class="btn ghost">刷新</button>
         <button type="button" id="btn-logout" class="btn ghost">退出</button>
       </div>
@@ -72,6 +76,7 @@
         <div class="rail-tabs" role="tablist">
           <button type="button" class="rail-tab active" data-rail="agents" id="tab-agents">Agents</button>
           <button type="button" class="rail-tab" data-rail="proxies" id="tab-proxies">Proxies</button>
+          <button type="button" class="rail-tab hidden" data-rail="system" id="tab-system">系统</button>
         </div>
 
         <div id="rail-agents" class="rail-pane">
@@ -102,6 +107,31 @@
             <span class="empty-title">暂无 Proxy</span>
             <span class="muted">登记边界转发层后可拉取上游</span>
           </p>
+        </div>
+
+        <div id="rail-system" class="rail-pane hidden">
+          <div class="rail-head">
+            <div>
+              <h2>系统</h2>
+              <p class="rail-count">用户与审计</p>
+            </div>
+          </div>
+          <div class="agent-list">
+            <button type="button" class="agent-item" id="btn-show-users">
+              <span class="agent-avatar">U</span>
+              <span class="agent-meta">
+                <span class="agent-name">用户管理</span>
+                <span class="agent-url muted">创建 / 禁用</span>
+              </span>
+            </button>
+            <button type="button" class="agent-item" id="btn-show-audit">
+              <span class="agent-avatar">L</span>
+              <span class="agent-meta">
+                <span class="agent-name">操作审计</span>
+                <span class="agent-url muted">最近操作记录</span>
+              </span>
+            </button>
+          </div>
         </div>
       </aside>
 
@@ -330,12 +360,73 @@
             <button type="button" id="btn-welcome-proxy" class="btn welcome-cta">登记 Proxy</button>
           </div>
         </div>
+
+        <div id="panel-password" class="surface enter hidden">
+          <div class="surface-head">
+            <div>
+              <p class="kicker">Account</p>
+              <h2>修改密码</h2>
+            </div>
+            <button type="button" id="btn-cancel-password" class="btn ghost small">关闭</button>
+          </div>
+          <form id="form-password" class="form-grid">
+            <label class="span-2">当前密码<input name="old_password" type="password" required autocomplete="current-password" /></label>
+            <label class="span-2">新密码<input name="new_password" type="password" required minlength="6" autocomplete="new-password" /></label>
+            <div class="form-actions">
+              <button type="submit" class="btn primary">保存并重新登录</button>
+            </div>
+            <p id="password-error" class="error" hidden></p>
+          </form>
+        </div>
+
+        <div id="panel-users" class="surface enter hidden">
+          <div class="surface-head">
+            <div>
+              <p class="kicker">Admin</p>
+              <h2>用户管理</h2>
+            </div>
+            <button type="button" id="btn-cancel-users" class="btn ghost small">关闭</button>
+          </div>
+          <form id="form-create-user" class="form-grid">
+            <label>用户名<input name="username" required placeholder="ops01" /></label>
+            <label>角色
+              <select name="role">
+                <option value="operator">operator</option>
+                <option value="admin">admin</option>
+              </select>
+            </label>
+            <label class="span-2">初始密码<input name="password" type="password" required minlength="6" /></label>
+            <div class="form-actions">
+              <button type="submit" class="btn primary">创建用户</button>
+            </div>
+            <p id="users-error" class="error" hidden></p>
+          </form>
+          <div id="user-list" class="service-list" style="margin-top:1rem"></div>
+        </div>
+
+        <div id="panel-audit" class="workspace enter hidden">
+          <header class="hero">
+            <div class="hero-text">
+              <p class="kicker">Audit</p>
+              <h2>操作审计</h2>
+              <p class="muted">最近变更与启停记录</p>
+            </div>
+            <div class="hero-actions">
+              <button type="button" id="btn-reload-audit" class="btn">刷新</button>
+              <button type="button" id="btn-cancel-audit" class="btn ghost">关闭</button>
+            </div>
+          </header>
+          <div id="audit-list" class="service-list"></div>
+          <p id="audit-empty" class="empty-state inline" hidden>
+            <span class="empty-title">暂无审计记录</span>
+          </p>
+        </div>
       </section>
     </main>
 
     <div id="toast" class="toast" hidden></div>
   </div>
 
-  <script src="/app.js?v=20260715k"></script>
+  <script src="/app.js?v=20260715v03"></script>
 </body>
 </html>

@@ -11,6 +11,10 @@ pub struct Config {
     pub token: String,
     /// Where PID files and service definitions live
     pub data_dir: PathBuf,
+    /// Periodically check desired services and restart if dead/unhealthy
+    pub watchdog_enabled: bool,
+    /// Watchdog interval in seconds
+    pub watchdog_interval_secs: u64,
 }
 
 impl Default for Config {
@@ -19,6 +23,8 @@ impl Default for Config {
             bind: "0.0.0.0:9100".into(),
             token: "change-me-to-a-long-secret".into(),
             data_dir: PathBuf::from("./data"),
+            watchdog_enabled: true,
+            watchdog_interval_secs: 15,
         }
     }
 }
@@ -39,6 +45,17 @@ impl Config {
         }
         if let Ok(v) = std::env::var("AXLEOPS_DATA_DIR") {
             cfg.data_dir = PathBuf::from(v);
+        }
+        if let Ok(v) = std::env::var("AXLEOPS_WATCHDOG_ENABLED") {
+            cfg.watchdog_enabled = matches!(
+                v.to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            );
+        }
+        if let Ok(v) = std::env::var("AXLEOPS_WATCHDOG_INTERVAL_SECS") {
+            if let Ok(n) = v.parse() {
+                cfg.watchdog_interval_secs = n;
+            }
         }
 
         fs::create_dir_all(&cfg.data_dir)?;
