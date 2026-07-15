@@ -41,10 +41,12 @@ impl AgentRegistry {
                 token TEXT NOT NULL,
                 tags TEXT NOT NULL DEFAULT '[]',
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                proxy_id TEXT
             );
             ",
         )?;
+        ensure_agents_proxy_id_column(&conn)?;
 
         let registry = Self {
             db_path: db_path.clone(),
@@ -87,8 +89,8 @@ impl AgentRegistry {
             let tx = conn.unchecked_transaction()?;
             for agent in &list {
                 tx.execute(
-                    "INSERT INTO agents (id, name, base_url, token, tags, created_at, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    "INSERT INTO agents (id, name, base_url, token, tags, created_at, updated_at, proxy_id)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)",
                     params![
                         agent.id,
                         agent.name,
@@ -127,7 +129,7 @@ impl AgentRegistry {
     pub fn list(&self) -> Result<Vec<AgentInfo>, RegistryError> {
         self.with_conn(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, base_url, token, tags, created_at, updated_at
+                "SELECT id, name, base_url, token, tags, created_at, updated_at, proxy_id
                  FROM agents ORDER BY name ASC",
             )?;
             let rows = stmt.query_map([], row_to_agent)?;
@@ -142,7 +144,7 @@ impl AgentRegistry {
     pub fn get(&self, id: &str) -> Result<AgentInfo, RegistryError> {
         self.with_conn(|conn| {
             conn.query_row(
-                "SELECT id, name, base_url, token, tags, created_at, updated_at
+                "SELECT id, name, base_url, token, tags, created_at, updated_at, proxy_id
                  FROM agents WHERE id = ?1",
                 params![id],
                 row_to_agent,
@@ -172,14 +174,18 @@ impl AgentRegistry {
             base_url,
             token: req.token,
             tags: req.tags,
+            proxy_id: req
+                .proxy_id
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
             created_at: now,
             updated_at: now,
         };
 
         self.with_conn(|conn| {
             match conn.execute(
-                "INSERT INTO agents (id, name, base_url, token, tags, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT INTO agents (id, name, base_url, token, tags, created_at, updated_at, proxy_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     agent.id,
                     agent.name,
@@ -188,6 +194,7 @@ impl AgentRegistry {
                     tags_to_json(&agent.tags)?,
                     agent.created_at.to_rfc3339(),
                     agent.updated_at.to_rfc3339(),
+                    agent.proxy_id,
                 ],
             ) {
                 Ok(_) => Ok(agent.clone()),
@@ -227,19 +234,25 @@ impl AgentRegistry {
         if let Some(tags) = req.tags {
             agent.tags = tags;
         }
+        if let Some(proxy_id) = req.proxy_id {
+            agent.proxy_id = proxy_id
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+        }
         agent.updated_at = Utc::now();
 
         self.with_conn(|conn| {
             match conn.execute(
                 "UPDATE agents
-                 SET name = ?1, base_url = ?2, token = ?3, tags = ?4, updated_at = ?5
-                 WHERE id = ?6",
+                 SET name = ?1, base_url = ?2, token = ?3, tags = ?4, updated_at = ?5, proxy_id = ?6
+                 WHERE id = ?7",
                 params![
                     agent.name,
                     agent.base_url,
                     agent.token,
                     tags_to_json(&agent.tags)?,
                     agent.updated_at.to_rfc3339(),
+                    agent.proxy_id,
                     id,
                 ],
             ) {
@@ -271,6 +284,22 @@ impl AgentRegistry {
     }
 }
 
+fn ensure_agents_proxy_id_column(conn: &Connection) -> anyhow::Result<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(agents)")?;
+    let cols = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    let mut found = false;
+    for c in cols {
+        if c? == "proxy_id" {
+            found = true;
+            break;
+        }
+    }
+    if !found {
+        conn.execute("ALTER TABLE agents ADD COLUMN proxy_id TEXT", [])?;
+    }
+    Ok(())
+}
+
 fn tags_to_json(tags: &[String]) -> Result<String, RegistryError> {
     serde_json::to_string(tags).map_err(|e| RegistryError::Other(e.to_string()))
 }
@@ -289,6 +318,7 @@ fn row_to_agent(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentInfo> {
     let tags_json: String = row.get(4)?;
     let created_at: String = row.get(5)?;
     let updated_at: String = row.get(6)?;
+    let proxy_id: Option<String> = row.get(7)?;
     let tags = tags_from_json(&tags_json).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(e))
     })?;
@@ -304,6 +334,7 @@ fn row_to_agent(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentInfo> {
         base_url: row.get(2)?,
         token: row.get(3)?,
         tags,
+        proxy_id: proxy_id.filter(|s| !s.is_empty()),
         created_at,
         updated_at,
     })

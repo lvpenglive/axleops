@@ -8,12 +8,15 @@ pub struct AgentInfo {
     pub id: String,
     /// Display name, e.g. prod-node-01
     pub name: String,
-    /// Base URL of the agent, e.g. http://10.0.0.5:9100
+    /// Base URL of the agent, e.g. http://10.0.0.5:9100 or http://proxy:9200/a/node-01
     pub base_url: String,
-    /// Token used when calling the agent API
+    /// Token used when calling the agent API (Agent token or Proxy token)
     pub token: String,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Optional link to a registered axleops-proxy
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -25,6 +28,8 @@ pub struct RegisterAgentRequest {
     pub token: String,
     #[serde(default)]
     pub tags: Vec<String>,
+    #[serde(default)]
+    pub proxy_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -37,6 +42,90 @@ pub struct UpdateAgentRequest {
     pub token: Option<String>,
     #[serde(default)]
     pub tags: Option<Vec<String>>,
+    #[serde(default)]
+    pub proxy_id: Option<Option<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProxyInfo {
+    pub id: String,
+    pub name: String,
+    /// Proxy root, e.g. http://10.0.0.2:9200
+    pub base_url: String,
+    /// Token for Admin → Proxy
+    pub token: String,
+    #[serde(default)]
+    pub notes: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RegisterProxyRequest {
+    pub name: String,
+    pub base_url: String,
+    pub token: String,
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateProxyRequest {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ImportUpstreamRequest {
+    /// Upstream id from proxy config (`[[agents]].id`)
+    pub upstream_id: String,
+    /// Override agent display name; default upstream.name
+    #[serde(default)]
+    pub agent_name: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProxyHealthView {
+    pub proxy_id: String,
+    pub proxy_name: String,
+    pub reachable: bool,
+    pub detail: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpstreamView {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub base_url: String,
+    pub path_prefix: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateUpstreamRequest {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    pub base_url: String,
+    pub token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateUpstreamRequest {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub token: Option<String>,
 }
 
 /// Forward body for starting a service on an agent (jar / script / command).

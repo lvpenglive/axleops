@@ -92,7 +92,13 @@ pub async fn agent_health(
     agent: &AgentInfo,
 ) -> Result<Value, ProxyError> {
     let url = format!("{}/health", agent.base_url);
-    let resp = client.get(&url).send().await?;
+    // Always send token so requests via axleops-proxy (/a/{id}/health) pass auth.
+    // Direct agent /health ignores unknown headers and stays compatible.
+    let resp = client
+        .get(&url)
+        .header("X-AxleOps-Token", &agent.token)
+        .send()
+        .await?;
     parse_json(resp).await
 }
 

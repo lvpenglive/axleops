@@ -1,6 +1,11 @@
 # Copy to config.toml and adjust values.
-# Or override with env: AXLEOPS_ADMIN_BIND / AXLEOPS_ADMIN_TOKEN / AXLEOPS_ADMIN_DATA_DIR
-# Agent registry is stored in <data_dir>/axleops.db (SQLite, bundled).
+# Or override with env:
+#   AXLEOPS_ADMIN_BIND / AXLEOPS_ADMIN_TOKEN / AXLEOPS_ADMIN_DATA_DIR
+#
+# Web 登录与 Admin API 使用同一 token（请求头 X-AxleOps-Token）。
+# 数据：<data_dir>/axleops.db（Agent / Proxy 注册等，SQLite bundled）。
+# 静态页：工作目录下 static/（与二进制同级启动）。
+# 用户名密码登录规划在 v0.3。
 
 bind = "0.0.0.0:9000"
 token = "change-me-to-a-long-secret"

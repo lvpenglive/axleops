@@ -1,24 +1,19 @@
-mod agents;
 mod auth;
 mod config;
-mod models;
-mod proxies;
-mod proxy;
+mod forward;
 mod routes;
+mod store;
 
-use agents::AgentRegistry;
 use config::Config;
-use proxies::ProxyRegistry;
+use store::UpstreamStore;
 use std::sync::Arc;
-use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<Config>,
-    pub agents: Arc<AgentRegistry>,
-    pub proxies: Arc<ProxyRegistry>,
+    pub store: Arc<UpstreamStore>,
     pub http: reqwest::Client,
 }
 
@@ -30,33 +25,31 @@ async fn main() -> anyhow::Result<()> {
 
     let config = Config::load()?;
     let bind = config.bind.clone();
+    let store = UpstreamStore::load(&config.data_dir, &config)?;
+    let list = store.list().unwrap_or_default();
     tracing::info!(
         bind = %bind,
         data_dir = %config.data_dir.display(),
-        "starting axleops-admin"
+        agents = list.len(),
+        "starting axleops-proxy"
     );
+    for u in &list {
+        tracing::info!(id = %u.id, name = %u.name, base_url = %u.base_url, "upstream ready");
+    }
 
-    let agents = AgentRegistry::load(&config.data_dir)?;
-    let proxies = ProxyRegistry::open(agents.db_path())?;
     let http = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(config.timeout_secs))
         .build()?;
 
     let state = AppState {
-        agents: Arc::new(agents),
-        proxies: Arc::new(proxies),
+        store: Arc::new(store),
         config: Arc::new(config),
         http,
     };
 
     let app = routes::router()
         .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::permissive())
         .with_state(state);
-
-    if !std::path::Path::new("static/index.html").exists() {
-        tracing::warn!("static/index.html not found; open UI from the axleops-admin working directory");
-    }
 
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     tracing::info!("listening on http://{bind}");

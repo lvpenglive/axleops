@@ -1,0 +1,18 @@
+# Copy to config.toml and adjust values.
+# Or override with env:
+#   AXLEOPS_PROXY_BIND / AXLEOPS_PROXY_TOKEN / AXLEOPS_PROXY_TIMEOUT_SECS / AXLEOPS_PROXY_DATA_DIR
+#
+# 推荐：在 Admin「Proxies」页面对该 Proxy 配置下游 Agent（写入 data/upstreams.json）。
+# 下面 [[agents]] 仅在首次启动且尚无 upstreams.json 时作为种子导入。
+
+bind = "0.0.0.0:9200"
+token = "change-me-proxy-secret"
+timeout_secs = 120
+data_dir = "./data"
+
+# Optional seed (first run only):
+# [[agents]]
+# id = "node-01"
+# name = "prod-node-01"
+# base_url = "http://10.0.1.11:9100"
+# token = "agent-secret-on-node-01"

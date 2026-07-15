@@ -1,5 +1,8 @@
 # Copy to config.toml and adjust values.
 # Or override with env: AXLEOPS_BIND / AXLEOPS_TOKEN / AXLEOPS_DATA_DIR
+#
+# Clients must send header: X-AxleOps-Token: <token>
+# Runtime under data_dir: services/ pids/ logs/
 
 bind = "0.0.0.0:9100"
 token = "change-me-to-a-long-secret"

@@ -6,24 +6,53 @@
   <title>AxleOps Admin</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/app.css?v=20260715d" />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/app.css?v=20260715j" />
 </head>
 <body>
   <div class="bg-grid" aria-hidden="true"></div>
 
   <section id="view-login" class="view login-view hidden">
-    <div class="login-panel enter">
-      <div class="login-mark" aria-hidden="true">A</div>
-      <p class="brand">AxleOps</p>
-      <h1>Admin Console</h1>
-      <p class="muted login-lead">控制面 · 纳管机器 Agent，编排 JAR / 脚本 / 命令生命周期</p>
-      <form id="form-login" class="login-form">
-        <label for="login-token">Admin Token</label>
-        <input id="login-token" type="password" autocomplete="current-password" required placeholder="输入 X-AxleOps-Token" />
-        <button type="submit" class="btn primary">进入控制台</button>
-        <p id="login-error" class="error" hidden></p>
-      </form>
+    <div class="login-stage enter">
+      <aside class="login-hero" aria-hidden="true">
+        <div class="login-hero-orb"></div>
+        <div class="login-hero-rail"></div>
+        <p class="login-kicker">Control Plane</p>
+        <p class="login-wordmark">Axle<span>Ops</span></p>
+        <p class="login-hero-line">一处接管多机 · Agent · Proxy · 进程生命周期</p>
+        <ul class="login-signals">
+          <li><span class="sig-dot online"></span>机器端启停</li>
+          <li><span class="sig-dot"></span>边界转发</li>
+          <li><span class="sig-dot"></span>日志与探活</li>
+        </ul>
+      </aside>
+
+      <div class="login-panel">
+        <div class="login-panel-top">
+          <span class="login-mark" aria-hidden="true">A</span>
+          <div>
+            <p class="brand">AxleOps</p>
+            <p class="login-panel-sub">管理员登录</p>
+          </div>
+        </div>
+        <h1>进入控制台</h1>
+        <p class="muted login-lead">使用 Admin 配置中的 Token 鉴权。该密钥只在本机会话保存，关闭标签页后需重新输入。</p>
+        <form id="form-login" class="login-form">
+          <label for="login-token">Admin Token</label>
+          <div class="token-field">
+            <input id="login-token" type="password" autocomplete="current-password" required placeholder="config.toml → token" />
+            <button type="button" id="btn-toggle-token" class="btn ghost small token-toggle" aria-pressed="false">显示</button>
+          </div>
+          <p class="login-hint mono">请求头 · X-AxleOps-Token</p>
+          <button type="submit" class="btn primary login-submit">进入控制台</button>
+          <p id="login-error" class="error" hidden></p>
+        </form>
+        <footer class="login-foot">
+          <span>默认端口 9000</span>
+          <span class="sep">·</span>
+          <span>与 Agent Token 相互独立</span>
+        </footer>
+      </div>
     </div>
   </section>
 
@@ -45,18 +74,40 @@
 
     <main class="layout">
       <aside class="rail enter">
-        <div class="rail-head">
-          <div>
-            <h2>Agents</h2>
-            <p class="rail-count"><span id="agent-count">0</span> 台已注册</p>
-          </div>
-          <button type="button" id="btn-show-register" class="btn small accent">+ 注册</button>
+        <div class="rail-tabs" role="tablist">
+          <button type="button" class="rail-tab active" data-rail="agents" id="tab-agents">Agents</button>
+          <button type="button" class="rail-tab" data-rail="proxies" id="tab-proxies">Proxies</button>
         </div>
-        <div id="agent-list" class="agent-list"></div>
-        <p id="agent-empty" class="empty-state" hidden>
-          <span class="empty-title">暂无 Agent</span>
-          <span class="muted">点击右上角注册一台机器端</span>
-        </p>
+
+        <div id="rail-agents" class="rail-pane">
+          <div class="rail-head">
+            <div>
+              <h2>Agents</h2>
+              <p class="rail-count"><span id="agent-count">0</span> 台 · 在线态每 15s 探测</p>
+            </div>
+            <button type="button" id="btn-show-register" class="btn small accent">+ 注册</button>
+          </div>
+          <div id="agent-list" class="agent-list"></div>
+          <p id="agent-empty" class="empty-state" hidden>
+            <span class="empty-title">暂无 Agent</span>
+            <span class="muted">直接注册，或从 Proxy 导入上游</span>
+          </p>
+        </div>
+
+        <div id="rail-proxies" class="rail-pane hidden">
+          <div class="rail-head">
+            <div>
+              <h2>Proxies</h2>
+              <p class="rail-count"><span id="proxy-count">0</span> 个 · 在线态每 15s 探测</p>
+            </div>
+            <button type="button" id="btn-show-proxy-register" class="btn small accent">+ 登记</button>
+          </div>
+          <div id="proxy-list" class="agent-list"></div>
+          <p id="proxy-empty" class="empty-state" hidden>
+            <span class="empty-title">暂无 Proxy</span>
+            <span class="muted">登记边界转发层后可拉取上游</span>
+          </p>
+        </div>
       </aside>
 
       <section class="main-col">
@@ -68,10 +119,11 @@
             </div>
             <button type="button" id="btn-cancel-register" class="btn ghost small">取消</button>
           </div>
+          <p class="muted form-hint">直连填 Agent 地址与 Token；经 Proxy 时建议在 Proxies 页导入，或手动填 <code>http://proxy:9200/a/&lt;id&gt;</code> + Proxy Token。</p>
           <form id="form-register" class="form-grid">
             <label>名称<input name="name" required placeholder="prod-node-01" /></label>
             <label>Base URL<input name="base_url" required placeholder="http://127.0.0.1:9100" /></label>
-            <label>Agent Token<input name="token" type="password" required /></label>
+            <label>Token<input name="token" type="password" required /></label>
             <label>Tags<input name="tags" placeholder="prod, east（逗号分隔）" /></label>
             <div class="form-actions">
               <button type="submit" class="btn primary">保存注册</button>
@@ -80,12 +132,91 @@
           </form>
         </div>
 
+        <div id="panel-proxy-register" class="surface enter hidden">
+          <div class="surface-head">
+            <div>
+              <p class="kicker">Boundary</p>
+              <h2>登记 Proxy</h2>
+            </div>
+            <button type="button" id="btn-cancel-proxy-register" class="btn ghost small">取消</button>
+          </div>
+          <p class="muted form-hint">填写 axleops-proxy 的根地址与 Token（不是下游 Agent Token）。可登记多个 Proxy。</p>
+          <form id="form-proxy-register" class="form-grid">
+            <label>名称<input name="name" required placeholder="dmz-proxy-east" /></label>
+            <label>Base URL<input name="base_url" required placeholder="http://10.0.0.2:9200" /></label>
+            <label>Proxy Token<input name="token" type="password" required /></label>
+            <label class="span-2">备注<input name="notes" placeholder="可选，如所属网区" /></label>
+            <div class="form-actions">
+              <button type="submit" class="btn primary">保存</button>
+            </div>
+            <p id="proxy-register-error" class="error" hidden></p>
+          </form>
+        </div>
+
+        <div id="panel-proxy-detail" class="workspace enter hidden">
+          <header class="hero">
+            <div class="hero-text">
+              <p class="kicker">Proxy</p>
+              <h2 id="proxy-detail-name">—</h2>
+              <p id="proxy-detail-url" class="mono muted"></p>
+              <p id="proxy-detail-online" class="hero-online unknown">未探测</p>
+              <p id="proxy-detail-notes" class="muted"></p>
+            </div>
+            <div class="hero-actions">
+              <button type="button" id="btn-ping-proxy" class="btn">Ping</button>
+              <button type="button" id="btn-reload-upstreams" class="btn">刷新上游</button>
+              <button type="button" id="btn-delete-proxy" class="btn danger">删除</button>
+            </div>
+          </header>
+          <p id="proxy-ping-result" class="ping-result mono" hidden></p>
+
+          <div class="workspace-grid">
+            <section class="surface">
+              <div class="surface-head compact">
+                <div>
+                  <p class="kicker">Upstreams</p>
+                  <h3>下游 Agent <span id="upstream-count" class="count-pill">0</span></h3>
+                </div>
+                <button type="button" id="btn-import-all" class="btn small accent" disabled>全部导入</button>
+              </div>
+              <div id="upstream-list" class="service-list"></div>
+              <p id="upstream-empty" class="empty-state inline" hidden>
+                <span class="empty-title">还没有下游</span>
+                <span class="muted">在右侧填写 Agent 的 id / 地址 / Token 并保存</span>
+              </p>
+            </section>
+
+            <section class="surface">
+              <div class="surface-head compact">
+                <div>
+                  <p class="kicker">Definition</p>
+                  <h3 id="upstream-form-title">配置下游 Agent</h3>
+                </div>
+                <button type="button" id="btn-reset-upstream-form" class="btn ghost small">新建</button>
+              </div>
+              <p class="muted form-hint">在此写入 Proxy 可访问的 Agent 地址与 Agent Token；保存后可「导入为 Agent」供控制台使用。</p>
+              <form id="form-upstream" class="form-grid">
+                <label>ID（路径键）<input name="id" id="upstream-id" required placeholder="node-01" /></label>
+                <label>显示名<input name="name" id="upstream-name" placeholder="prod-node-01" /></label>
+                <label class="span-2">Agent Base URL<input name="base_url" id="upstream-base-url" required placeholder="http://10.0.1.11:9100" /></label>
+                <label class="span-2">Agent Token<input name="token" id="upstream-token" type="password" placeholder="Agent 的 X-AxleOps-Token" /></label>
+                <div class="form-actions">
+                  <button type="submit" class="btn primary" id="btn-save-upstream">保存到 Proxy</button>
+                </div>
+                <p id="upstream-form-error" class="error" hidden></p>
+              </form>
+            </section>
+          </div>
+        </div>
+
         <div id="panel-detail" class="workspace enter hidden">
           <header class="hero">
             <div class="hero-text">
               <p class="kicker">Machine</p>
               <h2 id="detail-name">—</h2>
               <p id="detail-url" class="mono muted"></p>
+              <p id="detail-online" class="hero-online unknown">未探测</p>
+              <p id="detail-via" class="muted" hidden></p>
             </div>
             <div class="hero-actions">
               <button type="button" id="btn-ping" class="btn">Ping</button>
@@ -102,6 +233,18 @@
                   <h3>服务 <span id="service-count" class="count-pill">0</span></h3>
                 </div>
                 <button type="button" id="btn-reload-services" class="btn ghost small">刷新</button>
+              </div>
+              <div id="service-batch-bar" class="batch-bar">
+                <label class="inline check">
+                  <input type="checkbox" id="chk-select-all-services" />
+                  全选
+                </label>
+                <span id="batch-selected-count" class="batch-count muted">已选 0</span>
+                <div class="batch-actions">
+                  <button type="button" id="btn-batch-start" class="btn small" disabled>批量启动</button>
+                  <button type="button" id="btn-batch-stop" class="btn small danger" disabled>批量停止</button>
+                  <button type="button" id="btn-batch-restart" class="btn small" disabled>批量重启</button>
+                </div>
               </div>
               <div id="service-list" class="service-list"></div>
               <p id="service-empty" class="empty-state inline" hidden>
@@ -154,9 +297,26 @@
                 <p class="kicker">Observability</p>
                 <h3>日志</h3>
               </div>
-              <div class="row-actions">
+              <div class="row-actions log-controls">
                 <label class="inline">bytes
                   <input id="log-bytes" type="number" min="1024" value="32768" />
+                </label>
+                <label class="inline check">
+                  <input id="log-auto" type="checkbox" />
+                  自动刷新
+                </label>
+                <label class="inline">
+                  间隔
+                  <select id="log-interval">
+                    <option value="2000">2s</option>
+                    <option value="3000" selected>3s</option>
+                    <option value="5000">5s</option>
+                    <option value="10000">10s</option>
+                  </select>
+                </label>
+                <label class="inline check">
+                  <input id="log-follow" type="checkbox" checked />
+                  跟随底部
                 </label>
                 <button type="button" id="btn-fetch-logs" class="btn small" disabled>拉取</button>
               </div>
@@ -168,9 +328,12 @@
 
         <div id="panel-welcome" class="surface welcome enter">
           <div class="welcome-mark" aria-hidden="true">⌘</div>
-          <h2>选择一台 Agent 开始</h2>
-          <p class="muted">左侧接入机器端后，可 Ping、保存服务定义、启停进程，并查看运行日志。</p>
-          <button type="button" id="btn-welcome-register" class="btn primary welcome-cta">注册第一台 Agent</button>
+          <h2>选择 Agent 或 Proxy 开始</h2>
+          <p class="muted">左侧可切换 Agents / Proxies。跨网区时先登记 Proxy，再导入上游为 Agent。</p>
+          <div class="welcome-actions">
+            <button type="button" id="btn-welcome-register" class="btn primary welcome-cta">注册 Agent</button>
+            <button type="button" id="btn-welcome-proxy" class="btn welcome-cta">登记 Proxy</button>
+          </div>
         </div>
       </section>
     </main>
@@ -178,6 +341,6 @@
     <div id="toast" class="toast" hidden></div>
   </div>
 
-  <script src="/app.js?v=20260715d"></script>
+  <script src="/app.js?v=20260715j"></script>
 </body>
 </html>
