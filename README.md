@@ -8,6 +8,12 @@
 
 仓库：https://github.com/lvpenglive/axleops
 
+## 预览
+
+![Admin 登录页](docs/images/admin-login.png)
+
+![Admin 控制台](docs/images/admin-console.png)
+
 ## 结构
 
 | 目录 | 说明 |
