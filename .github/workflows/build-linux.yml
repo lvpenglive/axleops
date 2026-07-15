@@ -1,0 +1,96 @@
+name: Build Linux
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux-x86_64:
+    name: Linux x86_64 release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            axleops-agent
+            axleops-admin
+            axleops-proxy
+
+      - name: Build agent
+        run: cargo build --release
+        working-directory: axleops-agent
+
+      - name: Build admin
+        run: cargo build --release
+        working-directory: axleops-admin
+
+      - name: Build proxy
+        run: cargo build --release
+        working-directory: axleops-proxy
+
+      - name: Stage package
+        run: |
+          set -euo pipefail
+          STAGE=dist/axleops-linux-x86_64
+          mkdir -p "$STAGE/agent" "$STAGE/admin/static" "$STAGE/proxy"
+
+          cp axleops-agent/target/release/axleops-agent "$STAGE/agent/"
+          cp axleops-agent/config.example.toml "$STAGE/agent/config.example.toml"
+
+          cp axleops-admin/target/release/axleops-admin "$STAGE/admin/"
+          cp axleops-admin/config.example.toml "$STAGE/admin/config.example.toml"
+          cp -r axleops-admin/static/* "$STAGE/admin/static/"
+
+          cp axleops-proxy/target/release/axleops-proxy "$STAGE/proxy/"
+          cp axleops-proxy/config.example.toml "$STAGE/proxy/config.example.toml"
+
+          printf '%s\n' \
+            'AxleOps Linux x86_64 package' \
+            '' \
+            '1) Copy config.example.toml -> config.toml in each component dir and edit secrets.' \
+            '2) Start from that directory so relative paths (./data, ./static) work:' \
+            '' \
+            '   cd agent && ./axleops-agent' \
+            '   cd admin && ./axleops-admin' \
+            '   cd proxy && ./axleops-proxy   # optional' \
+            '' \
+            'Admin UI requires the static/ folder next to axleops-admin.' \
+            > "$STAGE/README.txt"
+
+          chmod +x "$STAGE/agent/axleops-agent" "$STAGE/admin/axleops-admin" "$STAGE/proxy/axleops-proxy"
+          mkdir -p dist
+          tar -C dist -czf dist/axleops-linux-x86_64.tar.gz axleops-linux-x86_64
+          ls -lh dist/axleops-linux-x86_64.tar.gz
+          find "$STAGE" -type f | sort
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: axleops-linux-x86_64
+          path: dist/axleops-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/axleops-linux-x86_64.tar.gz
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

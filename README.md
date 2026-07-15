@@ -190,6 +190,17 @@ cd axleops-admin && cargo run
 
 ### 4. 生产 / 联机部署（推荐 release）
 
+#### Linux 包（GitHub Actions）
+
+推送到 `main`、打 `v*` 标签，或在 Actions 里手动 **Run workflow**，会自动打 `x86_64` Linux 产物：
+
+- Artifact：`axleops-linux-x86_64.tar.gz`（含 agent / admin[+static] / proxy + example 配置）
+- 标签发布：同步挂到 GitHub Release 附件
+
+解压后在各目录复制 `config.example.toml` → `config.toml`，再启动对应二进制。
+
+#### 本机编译
+
 在**构建机**上编译（或各机分别编译）：
 
 ```bash
@@ -203,6 +214,7 @@ cd ../axleops-proxy && cargo build --release
 # 产物：target/release/axleops-proxy(.exe)
 ```
 
+Windows 要打 Linux 包时，优先用上面的 Actions，或在 WSL 里执行相同命令。
 **部署目录建议：**
 
 ```text
