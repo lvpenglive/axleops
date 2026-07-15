@@ -316,18 +316,6 @@ html, body {
   font-size: 0.95rem;
 }
 
-.login-foot {
-  margin-top: 1.8rem;
-  padding-top: 1rem;
-  border-top: 1px solid var(--line);
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem 0.55rem;
-  font-size: 0.74rem;
-  color: var(--muted);
-}
-.login-foot .sep { opacity: 0.5; }
-
 @keyframes orb-spin {
   to { transform: rotate(360deg); }
 }
