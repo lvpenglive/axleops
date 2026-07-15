@@ -1,6 +1,6 @@
 # AxleOps
 
-微服务及其他服务启停管理：支持 JAR、shell/Python 等脚本与通用命令。
+axleops 微服务及其他服务启停管理：支持 JAR、shell / Python 等脚本和通用命令。
 
 ## 结构
 
