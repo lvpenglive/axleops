@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AxleOps Admin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/app.css?v=20260715d" />
+</head>
+<body>
+  <div class="bg-grid" aria-hidden="true"></div>
+
+  <section id="view-login" class="view login-view hidden">
+    <div class="login-panel enter">
+      <div class="login-mark" aria-hidden="true">A</div>
+      <p class="brand">AxleOps</p>
+      <h1>Admin Console</h1>
+      <p class="muted login-lead">控制面 · 纳管机器 Agent，编排 JAR / 脚本 / 命令生命周期</p>
+      <form id="form-login" class="login-form">
+        <label for="login-token">Admin Token</label>
+        <input id="login-token" type="password" autocomplete="current-password" required placeholder="输入 X-AxleOps-Token" />
+        <button type="submit" class="btn primary">进入控制台</button>
+        <p id="login-error" class="error" hidden></p>
+      </form>
+    </div>
+  </section>
+
+  <div id="view-app" class="view app-shell hidden">
+    <header class="topbar">
+      <div class="topbar-brand">
+        <span class="brand-mark" aria-hidden="true">A</span>
+        <div>
+          <div class="brand">AxleOps</div>
+          <div class="topbar-sub">Control Plane</div>
+        </div>
+        <span class="badge">Admin</span>
+      </div>
+      <div class="topbar-actions">
+        <button type="button" id="btn-refresh" class="btn ghost">刷新</button>
+        <button type="button" id="btn-logout" class="btn ghost">退出</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <aside class="rail enter">
+        <div class="rail-head">
+          <div>
+            <h2>Agents</h2>
+            <p class="rail-count"><span id="agent-count">0</span> 台已注册</p>
+          </div>
+          <button type="button" id="btn-show-register" class="btn small accent">+ 注册</button>
+        </div>
+        <div id="agent-list" class="agent-list"></div>
+        <p id="agent-empty" class="empty-state" hidden>
+          <span class="empty-title">暂无 Agent</span>
+          <span class="muted">点击右上角注册一台机器端</span>
+        </p>
+      </aside>
+
+      <section class="main-col">
+        <div id="panel-register" class="surface enter hidden">
+          <div class="surface-head">
+            <div>
+              <p class="kicker">Onboarding</p>
+              <h2>注册 Agent</h2>
+            </div>
+            <button type="button" id="btn-cancel-register" class="btn ghost small">取消</button>
+          </div>
+          <form id="form-register" class="form-grid">
+            <label>名称<input name="name" required placeholder="prod-node-01" /></label>
+            <label>Base URL<input name="base_url" required placeholder="http://127.0.0.1:9100" /></label>
+            <label>Agent Token<input name="token" type="password" required /></label>
+            <label>Tags<input name="tags" placeholder="prod, east（逗号分隔）" /></label>
+            <div class="form-actions">
+              <button type="submit" class="btn primary">保存注册</button>
+            </div>
+            <p id="register-error" class="error" hidden></p>
+          </form>
+        </div>
+
+        <div id="panel-detail" class="workspace enter hidden">
+          <header class="hero">
+            <div class="hero-text">
+              <p class="kicker">Machine</p>
+              <h2 id="detail-name">—</h2>
+              <p id="detail-url" class="mono muted"></p>
+            </div>
+            <div class="hero-actions">
+              <button type="button" id="btn-ping" class="btn">Ping</button>
+              <button type="button" id="btn-delete-agent" class="btn danger">删除</button>
+            </div>
+          </header>
+          <p id="ping-result" class="ping-result mono" hidden></p>
+
+          <div class="workspace-grid">
+            <section class="surface">
+              <div class="surface-head compact">
+                <div>
+                  <p class="kicker">Runtime</p>
+                  <h3>服务 <span id="service-count" class="count-pill">0</span></h3>
+                </div>
+                <button type="button" id="btn-reload-services" class="btn ghost small">刷新</button>
+              </div>
+              <div id="service-list" class="service-list"></div>
+              <p id="service-empty" class="empty-state inline" hidden>
+                <span class="empty-title">还没有服务</span>
+                <span class="muted">在右侧保存配置，或直接启动</span>
+              </p>
+            </section>
+
+            <section class="surface">
+              <div class="surface-head compact">
+                <div>
+                  <p class="kicker">Definition</p>
+                  <h3 id="form-title">配置服务</h3>
+                </div>
+                <button type="button" id="btn-reset-form" class="btn ghost small">新建</button>
+              </div>
+              <form id="form-start" class="form-grid">
+                <label>名称<input name="name" id="field-name" required placeholder="order-service" /></label>
+                <label>类型
+                  <select name="kind" id="start-kind">
+                    <option value="jar">jar</option>
+                    <option value="script">script</option>
+                    <option value="command">command</option>
+                  </select>
+                </label>
+                <label class="kind-jar span-2">JAR 路径<input name="jar_path" placeholder="E:\app\app.jar" /></label>
+                <label class="kind-jar">JVM 参数<input name="jvm_args" placeholder="-Xms256m -Xmx512m" /></label>
+                <label class="kind-jar">App 参数<input name="app_args" placeholder="--spring.profiles.active=prod" /></label>
+                <label class="kind-script hidden span-2">脚本路径<input name="script_path" placeholder="E:\scripts\run.ps1" /></label>
+                <label class="kind-script hidden">解释器<input name="interpreter" placeholder="powershell / bash" /></label>
+                <label class="kind-command hidden span-2">命令<input name="command" placeholder="node" /></label>
+                <label class="kind-script kind-command hidden span-2">参数<input name="args" placeholder="arg1 arg2" /></label>
+                <label>工作目录<input name="work_dir" placeholder="可选" /></label>
+                <label>Health URL<input name="health_url" placeholder="http://127.0.0.1:8080/actuator/health" /></label>
+                <label class="span-2">环境变量
+                  <textarea name="env" id="field-env" rows="3" placeholder="KEY=value&#10;SPRING_PROFILES_ACTIVE=prod"></textarea>
+                </label>
+                <div class="form-actions">
+                  <button type="button" id="btn-save-service" class="btn">仅保存</button>
+                  <button type="button" id="btn-start-service" class="btn primary">保存并启动</button>
+                </div>
+                <p id="start-error" class="error" hidden></p>
+              </form>
+            </section>
+          </div>
+
+          <section class="surface log-surface">
+            <div class="surface-head compact">
+              <div>
+                <p class="kicker">Observability</p>
+                <h3>日志</h3>
+              </div>
+              <div class="row-actions">
+                <label class="inline">bytes
+                  <input id="log-bytes" type="number" min="1024" value="32768" />
+                </label>
+                <button type="button" id="btn-fetch-logs" class="btn small" disabled>拉取</button>
+              </div>
+            </div>
+            <p id="log-target" class="log-hint mono muted">从服务列表点「日志」载入输出</p>
+            <pre id="log-content" class="log-box"></pre>
+          </section>
+        </div>
+
+        <div id="panel-welcome" class="surface welcome enter">
+          <div class="welcome-mark" aria-hidden="true">⌘</div>
+          <h2>选择一台 Agent 开始</h2>
+          <p class="muted">左侧接入机器端后，可 Ping、保存服务定义、启停进程，并查看运行日志。</p>
+          <button type="button" id="btn-welcome-register" class="btn primary welcome-cta">注册第一台 Agent</button>
+        </div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" hidden></div>
+  </div>
+
+  <script src="/app.js?v=20260715d"></script>
+</body>
+</html>

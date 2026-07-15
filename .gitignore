@@ -1,0 +1,19 @@
+# Rust
+**/target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# Local secrets & runtime data
+**/config.toml
+**/data/
+**/*.db
+**/*.log
+**/*.pid.json
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~

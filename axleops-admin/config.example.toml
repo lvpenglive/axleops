@@ -1,0 +1,7 @@
+# Copy to config.toml and adjust values.
+# Or override with env: AXLEOPS_ADMIN_BIND / AXLEOPS_ADMIN_TOKEN / AXLEOPS_ADMIN_DATA_DIR
+# Agent registry is stored in <data_dir>/axleops.db (SQLite, bundled).
+
+bind = "0.0.0.0:9000"
+token = "change-me-to-a-long-secret"
+data_dir = "./data"
