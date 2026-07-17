@@ -1,6 +1,7 @@
 use crate::models::{ServiceKind, ServiceSpec, ServiceState, ServiceStatus};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -54,6 +55,9 @@ pub struct ProcessManager {
     data_dir: PathBuf,
     /// Serialize starts to avoid duplicate PID races under watchdog / concurrent API.
     start_lock: Mutex<()>,
+    /// Live OS handles for processes we spawned in this agent lifetime.
+    /// Prefer `Child::kill()` over PID-only taskkill/kill — especially on Windows.
+    children: Mutex<HashMap<String, Child>>,
 }
 
 impl ProcessManager {
@@ -62,6 +66,43 @@ impl ProcessManager {
         Self {
             data_dir,
             start_lock: Mutex::new(()),
+            children: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn store_child(&self, name: &str, child: Child) {
+        if let Ok(mut map) = self.children.lock() {
+            // Drop any previous handle for this name without killing it;
+            // caller is responsible for stopping first.
+            map.insert(name.to_string(), child);
+        }
+    }
+
+    fn take_child(&self, name: &str) -> Option<Child> {
+        self.children
+            .lock()
+            .ok()
+            .and_then(|mut map| map.remove(name))
+    }
+
+    /// Reap exited children so PID files / status stay accurate.
+    fn reap_child_if_exited(&self, name: &str) -> bool {
+        let Ok(mut map) = self.children.lock() else {
+            return false;
+        };
+        let Some(child) = map.get_mut(name) else {
+            return false;
+        };
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                map.remove(name);
+                true
+            }
+            Ok(None) => false,
+            Err(_) => {
+                map.remove(name);
+                true
+            }
         }
     }
 
@@ -132,7 +173,7 @@ impl ProcessManager {
             jvm_args: Vec::new(),
             app_args: Vec::new(),
             args: Vec::new(),
-            env: std::collections::HashMap::new(),
+            env: HashMap::new(),
             health_url: None,
         };
         match kind {
@@ -287,6 +328,10 @@ impl ProcessManager {
             .as_ref()
             .and_then(|m| m.spec.as_ref())
             .and_then(|s| s.health_url.as_deref());
+
+        // Reap exited Child handles so we don't leave zombies / stale tracking.
+        let _ = self.reap_child_if_exited(name);
+
         match self.read_record(name) {
             Ok(Some(record)) if Self::is_pid_alive(record.pid) => {
                 if meta.is_none() {
@@ -302,6 +347,7 @@ impl ProcessManager {
                 Self::apply_health(status, health_url)
             }
             Ok(Some(record)) => {
+                let _ = self.take_child(name);
                 let _ = self.clear_record(name);
                 let kind = meta
                     .as_ref()
@@ -324,6 +370,7 @@ impl ProcessManager {
                 Self::status_stopped(name, kind, target, Some("stale pid cleared".into()))
             }
             Ok(None) => {
+                let _ = self.take_child(name);
                 let kind = meta.as_ref().and_then(|m| Self::parse_kind(&m.kind));
                 let target = meta
                     .as_ref()
@@ -443,22 +490,44 @@ impl ProcessManager {
             .stdout(Stdio::from(log_file.try_clone()?))
             .stderr(Stdio::from(log_file));
 
-        // Detach from agent process group on Unix; on Windows this is a no-op style spawn.
+        // Detach so the service is not bound to the agent console/session.
+        // Killing the service must not require killing the agent (and vice versa).
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
-            cmd.process_group(0);
+            // setsid(): new session + process group, leave agent's controlling TTY.
+            // After this, PGID == SID == child pid — stop can signal the whole tree with -pid.
+            unsafe {
+                cmd.pre_exec(|| {
+                    if libc::setsid() == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            // CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+            const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
         }
 
-        let child: Child = cmd.spawn()?;
+        let mut child: Child = cmd.spawn()?;
         let pid = child.id();
         let started_at = Utc::now();
 
         let mut meta = Self::meta_from_spec(spec)?;
         meta.desired_running = true;
-        self.write_meta(&meta)?;
+        if let Err(e) = self.write_meta(&meta) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(e);
+        }
 
-        self.write_record(
+        if let Err(e) = self.write_record(
             &spec.name,
             &PidRecord {
                 pid,
@@ -466,10 +535,32 @@ impl ProcessManager {
                 target: target.clone(),
                 started_at,
             },
-        )?;
+        ) {
+            let _ = child.kill();
+            let _ = child.wait();
+            if let Ok(Some(mut meta)) = self.read_meta(&spec.name) {
+                meta.desired_running = false;
+                let _ = self.write_meta(&meta);
+            }
+            return Err(e);
+        }
 
-        // Avoid waiting on child; ownership dropped intentionally.
-        std::mem::forget(child);
+        // Keep the OS handle so stop can TerminateProcess / SIGKILL without relying on PID alone.
+        self.store_child(&spec.name, child);
+
+        // Catch immediate crash (bad jar / missing main / fatal config).
+        std::thread::sleep(std::time::Duration::from_millis(800));
+        if self.reap_child_if_exited(&spec.name) || !Self::is_pid_alive(pid) {
+            let _ = self.take_child(&spec.name);
+            let _ = self.clear_record(&spec.name);
+            if let Ok(Some(mut meta)) = self.read_meta(&spec.name) {
+                meta.desired_running = false;
+                let _ = self.write_meta(&meta);
+            }
+            return Err(ProcessError::Other(format!(
+                "process exited immediately after start (pid={pid}); check service logs"
+            )));
+        }
 
         let jar_path = if kind == ServiceKind::Jar {
             Some(target.clone())
@@ -493,6 +584,26 @@ impl ProcessManager {
             // Give process a brief moment before first probe.
             std::thread::sleep(std::time::Duration::from_secs(2));
             status = Self::apply_health(status, Some(url));
+            // Initial probe failure = start failed: tear down so the JVM is not left orphaned.
+            if matches!(status.state, ServiceState::Unhealthy) {
+                let detail = status
+                    .message
+                    .clone()
+                    .unwrap_or_else(|| "health check failed".into());
+                if let Err(e) = self.stop_runtime(&spec.name, true) {
+                    tracing::warn!(
+                        service = %spec.name,
+                        error = %e,
+                        "cleanup after failed health probe also failed"
+                    );
+                    return Err(ProcessError::Other(format!(
+                        "start failed ({detail}); process cleanup failed: {e}"
+                    )));
+                }
+                return Err(ProcessError::Other(format!(
+                    "start failed ({detail}); process stopped"
+                )));
+            }
         }
 
         Ok(status)
@@ -597,8 +708,20 @@ impl ProcessManager {
             .read_record(name)?
             .ok_or(ProcessError::NotRunning)?;
 
-        if !Self::is_pid_alive(record.pid) {
-            self.clear_record(name)?;
+        let mut child = self.take_child(name);
+
+        // Prefer owned handle for liveness; fall back to PID scan.
+        let alive = match child.as_mut().and_then(|c| c.try_wait().ok()) {
+            Some(Some(_)) => false, // already exited
+            Some(None) => true,
+            None => Self::is_pid_alive(record.pid),
+        };
+
+        if !alive {
+            let _ = self.clear_record(name);
+            if let Some(mut c) = child {
+                let _ = c.wait();
+            }
             return Err(ProcessError::NotRunning);
         }
 
@@ -606,26 +729,60 @@ impl ProcessManager {
         let _ = terminate_pid(record.pid);
 
         for _ in 0..30 {
-            if !Self::is_pid_alive(record.pid) {
+            let gone = match child.as_mut().and_then(|c| c.try_wait().ok()) {
+                Some(Some(_)) => true,
+                Some(None) => false,
+                None => !Self::is_pid_alive(record.pid),
+            };
+            if gone {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
 
-        if Self::is_pid_alive(record.pid) {
-            force_kill_pid(record.pid)?;
+        let still_alive = match child.as_mut().and_then(|c| c.try_wait().ok()) {
+            Some(Some(_)) => false,
+            Some(None) => true,
+            None => Self::is_pid_alive(record.pid),
+        };
+
+        if still_alive {
+            // Owned handle → TerminateProcess (Windows) / kill (Unix); most reliable path.
+            if let Some(ref mut c) = child {
+                let _ = c.kill();
+            }
+            // Also kill the process tree by PID (children of java, etc.).
+            let _ = force_kill_pid(record.pid);
             for _ in 0..20 {
-                if !Self::is_pid_alive(record.pid) {
+                let gone = match child.as_mut().and_then(|c| c.try_wait().ok()) {
+                    Some(Some(_)) => true,
+                    Some(None) => false,
+                    None => !Self::is_pid_alive(record.pid),
+                };
+                if gone {
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
-            if Self::is_pid_alive(record.pid) {
+            let still = match child.as_mut().and_then(|c| c.try_wait().ok()) {
+                Some(Some(_)) => false,
+                Some(None) => true,
+                None => Self::is_pid_alive(record.pid),
+            };
+            if still {
+                // Put handle back so a later stop can retry.
+                if let Some(c) = child {
+                    self.store_child(name, c);
+                }
                 return Err(ProcessError::Other(format!(
                     "process still alive after force kill (pid={})",
                     record.pid
                 )));
             }
+        }
+
+        if let Some(mut c) = child {
+            let _ = c.wait();
         }
 
         // Keep existing definition (incl. full spec); only clear runtime pid.
@@ -911,12 +1068,8 @@ fn terminate_pid(pid: u32) -> Result<(), ProcessError> {
     }
     #[cfg(unix)]
     {
-        let status = Command::new("kill")
-            .args(["-15", &pid.to_string()])
-            .status()?;
-        if !status.success() {
-            return Err(ProcessError::Other(format!("kill -15 failed for pid {pid}")));
-        }
+        // Soft signal whole process group (setsid → PGID == pid). Best-effort.
+        unix_kill_group(pid, libc::SIGTERM);
         Ok(())
     }
 }
@@ -929,14 +1082,35 @@ fn force_kill_pid(pid: u32) -> Result<(), ProcessError> {
     }
     #[cfg(unix)]
     {
-        let status = Command::new("kill")
-            .args(["-9", &pid.to_string()])
-            .status()?;
-        if !status.success() {
-            return Err(ProcessError::Other(format!("kill -9 failed for pid {pid}")));
+        // SIGKILL process group first, then the root pid as fallback.
+        if unix_kill_group(pid, libc::SIGKILL) {
+            return Ok(());
         }
-        Ok(())
+        if unix_kill_one(pid, libc::SIGKILL) {
+            return Ok(());
+        }
+        // ESRCH = already gone
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() == Some(libc::ESRCH) {
+            return Ok(());
+        }
+        Err(ProcessError::Other(format!(
+            "kill -9 failed for pid {pid}: {err}"
+        )))
     }
+}
+
+#[cfg(unix)]
+fn unix_kill_group(pid: u32, sig: i32) -> bool {
+    // Negative pid => entire process group (session leader after setsid).
+    let rc = unsafe { libc::kill(-(pid as i32), sig) };
+    rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+}
+
+#[cfg(unix)]
+fn unix_kill_one(pid: u32, sig: i32) -> bool {
+    let rc = unsafe { libc::kill(pid as i32, sig) };
+    rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
 }
 
 /// Append a marker line to log (useful for debugging).

@@ -52,6 +52,7 @@ dependencies = [
  "axum",
  "chrono",
  "encoding_rs",
+ "libc",
  "serde",
  "serde_json",
  "sysinfo",
