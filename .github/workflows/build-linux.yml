@@ -13,10 +13,8 @@ env:
 
 jobs:
   linux-x86_64:
-    name: Linux x86_64 release
+    name: Linux x86_64 (Ubuntu)
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -45,39 +43,10 @@ jobs:
         working-directory: axleops-proxy
 
       - name: Stage package
-        run: |
-          set -euo pipefail
-          STAGE=dist/axleops-linux-x86_64
-          mkdir -p "$STAGE/agent" "$STAGE/admin/static" "$STAGE/proxy"
-
-          cp axleops-agent/target/release/axleops-agent "$STAGE/agent/"
-          cp axleops-agent/config.example.toml "$STAGE/agent/config.example.toml"
-
-          cp axleops-admin/target/release/axleops-admin "$STAGE/admin/"
-          cp axleops-admin/config.example.toml "$STAGE/admin/config.example.toml"
-          cp -r axleops-admin/static/* "$STAGE/admin/static/"
-
-          cp axleops-proxy/target/release/axleops-proxy "$STAGE/proxy/"
-          cp axleops-proxy/config.example.toml "$STAGE/proxy/config.example.toml"
-
-          printf '%s\n' \
-            'AxleOps Linux x86_64 package' \
-            '' \
-            '1) Copy config.example.toml -> config.toml in each component dir and edit secrets.' \
-            '2) Start from that directory so relative paths (./data, ./static) work:' \
-            '' \
-            '   cd agent && ./axleops-agent' \
-            '   cd admin && ./axleops-admin' \
-            '   cd proxy && ./axleops-proxy   # optional' \
-            '' \
-            'Admin UI requires the static/ folder next to axleops-admin.' \
-            > "$STAGE/README.txt"
-
-          chmod +x "$STAGE/agent/axleops-agent" "$STAGE/admin/axleops-admin" "$STAGE/proxy/axleops-proxy"
-          mkdir -p dist
-          tar -C dist -czf dist/axleops-linux-x86_64.tar.gz axleops-linux-x86_64
-          ls -lh dist/axleops-linux-x86_64.tar.gz
-          find "$STAGE" -type f | sort
+        env:
+          PACKAGE_NAME: axleops-linux-x86_64
+          PACKAGE_LABEL: Linux x86_64 (glibc / Ubuntu runner)
+        run: bash .github/scripts/package-linux.sh
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -86,11 +55,88 @@ jobs:
           path: dist/axleops-linux-x86_64.tar.gz
           if-no-files-found: error
 
-      - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
+  # GitHub 无官方麒麟 runner：在社区 Kylin V10 SP3 容器内编译，
+  # 以贴近银河麒麟高级服务器操作系统 V10 SP3 的 glibc / 依赖环境。
+  kylin-v10-sp3-x86_64:
+    name: Kylin V10 SP3 x86_64
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build inside Kylin V10 SP3 container
+        run: |
+          set -euo pipefail
+          docker pull hxsoong/kylin:v10-sp3
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            -w /workspace \
+            -e CARGO_HOME=/workspace/.cargo-kylin \
+            -e RUSTUP_HOME=/workspace/.rustup-kylin \
+            hxsoong/kylin:v10-sp3 \
+            bash -lc '
+              set -euo pipefail
+              echo "=== host productinfo ==="
+              cat /etc/.productinfo 2>/dev/null || true
+              cat /etc/os-release 2>/dev/null || true
+
+              yum install -y \
+                gcc gcc-c++ make \
+                openssl-devel pkgconfig perl \
+                curl ca-certificates tar gzip git \
+                || yum install -y gcc gcc-c++ make openssl-devel pkgconfig perl curl tar gzip
+
+              export PATH="$CARGO_HOME/bin:$PATH"
+              if ! command -v rustc >/dev/null 2>&1; then
+                curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
+                  | sh -s -- -y --default-toolchain stable --profile minimal
+              fi
+              # shellcheck source=/dev/null
+              source "$CARGO_HOME/env"
+              rustc -vV
+
+              cargo build --release --manifest-path axleops-agent/Cargo.toml
+              cargo build --release --manifest-path axleops-admin/Cargo.toml
+              cargo build --release --manifest-path axleops-proxy/Cargo.toml
+            '
+
+      - name: Stage package
+        env:
+          PACKAGE_NAME: axleops-kylin-v10-sp3-x86_64
+          PACKAGE_LABEL: Kylin V10 SP3 x86_64 (built in hxsoong/kylin:v10-sp3)
+        run: bash .github/scripts/package-linux.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: axleops-kylin-v10-sp3-x86_64
+          path: dist/axleops-kylin-v10-sp3-x86_64.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Attach release assets
+    needs: [linux-x86_64, kylin-v10-sp3-x86_64]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: axleops-*
+          merge-multiple: true
+
+      - name: List assets
+        run: ls -lh dist/
+
+      - name: Create / update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/axleops-linux-x86_64.tar.gz
+          files: |
+            dist/axleops-linux-x86_64.tar.gz
+            dist/axleops-kylin-v10-sp3-x86_64.tar.gz
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

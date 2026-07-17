@@ -192,12 +192,18 @@ cd axleops-admin && cargo run
 
 #### Linux 包（GitHub Actions）
 
-推送到 `main`、打 `v*` 标签，或在 Actions 里手动 **Run workflow**，会自动打 `x86_64` Linux 产物：
+推送到 `main`、打 `v*` 标签，或在 Actions 里手动 **Run workflow**，会打两套 `x86_64` 产物：
 
-- Artifact：`axleops-linux-x86_64.tar.gz`（含 agent / admin[+static] / proxy + example 配置）
-- 标签发布：同步挂到 GitHub Release 附件
+| Artifact | 说明 |
+|----------|------|
+| `axleops-linux-x86_64.tar.gz` | Ubuntu runner 通用 Linux（glibc 较新） |
+| `axleops-kylin-v10-sp3-x86_64.tar.gz` | 在社区镜像 `hxsoong/kylin:v10-sp3` 内编译，贴近银河麒麟 V10 SP3 |
 
-解压后在各目录复制 `config.example.toml` → `config.toml`，再启动对应二进制。
+每包含 agent / admin[+static] / proxy + example 配置。标签发布时两套都会挂到 GitHub Release。
+
+> GitHub 没有官方麒麟 runner；麒麟包是在该 SP3 容器里编的，用于在 V10 SP3 上更稳地运行。若你有真实麒麟机，也可挂 **self-hosted runner** 做同机构建。
+
+解压后在各目录复制 `config.example.toml` → `config.toml`，再启动对应二进制。麒麟环境请优先用 `kylin-v10-sp3` 那包。
 
 #### 本机编译
 
