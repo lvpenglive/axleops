@@ -460,12 +460,12 @@
         .join("");
       btn.innerHTML = `
         <span class="agent-avatar">${escapeHtml(initialOf(agent.name))}</span>
-        <span>
-          <span class="name-row">${onlineDotHtml("agent", agent.id)}<span class="name">${escapeHtml(
+        <span class="agent-body">
+          <span class="name-row">${onlineDotHtml("agent", agent.id)}<span class="name" title="${escapeHtml(
         agent.name
-      )}</span></span>
-          <span class="meta">${escapeHtml(agent.base_url)}</span>
-          ${via ? `<span class="meta via">via ${escapeHtml(via)}</span>` : ""}
+      )}">${escapeHtml(agent.name)}</span></span>
+          <span class="meta" title="${escapeHtml(agent.base_url)}">${escapeHtml(agent.base_url)}</span>
+          ${via ? `<span class="meta via" title="via ${escapeHtml(via)}">via ${escapeHtml(via)}</span>` : ""}
           ${tags ? `<span class="tag-row">${tags}</span>` : ""}
         </span>
       `;
@@ -488,12 +488,16 @@
       btn.style.animationDelay = `${i * 45}ms`;
       btn.innerHTML = `
         <span class="agent-avatar proxy">${escapeHtml(initialOf(proxy.name))}</span>
-        <span>
-          <span class="name-row">${onlineDotHtml("proxy", proxy.id)}<span class="name">${escapeHtml(
+        <span class="agent-body">
+          <span class="name-row">${onlineDotHtml("proxy", proxy.id)}<span class="name" title="${escapeHtml(
         proxy.name
-      )}</span></span>
-          <span class="meta">${escapeHtml(proxy.base_url)}</span>
-          ${proxy.notes ? `<span class="meta">${escapeHtml(proxy.notes)}</span>` : ""}
+      )}">${escapeHtml(proxy.name)}</span></span>
+          <span class="meta" title="${escapeHtml(proxy.base_url)}">${escapeHtml(proxy.base_url)}</span>
+          ${
+            proxy.notes
+              ? `<span class="meta" title="${escapeHtml(proxy.notes)}">${escapeHtml(proxy.notes)}</span>`
+              : ""
+          }
         </span>
       `;
       btn.addEventListener("click", () => selectProxy(proxy.id));
@@ -656,16 +660,20 @@
   async function openAgentDetail(agent) {
     showDetail();
     els.detailName.textContent = agent.name;
+    els.detailName.title = agent.name || "";
     els.detailUrl.textContent = agent.base_url;
+    els.detailUrl.title = agent.base_url || "";
     setHeroOnline(els.detailOnline, "agent", agent.id);
     if (els.detailVia) {
       const via = agent.proxy_id ? proxyNameOf(agent.proxy_id) : null;
       if (via) {
         els.detailVia.hidden = false;
         els.detailVia.textContent = `经 Proxy：${via}`;
+        els.detailVia.title = `经 Proxy：${via}`;
       } else {
         els.detailVia.hidden = true;
         els.detailVia.textContent = "";
+        els.detailVia.title = "";
       }
     }
     els.pingResult.hidden = true;
@@ -682,9 +690,12 @@
   async function openProxyDetail(proxy) {
     showProxyDetail();
     els.proxyDetailName.textContent = proxy.name;
+    els.proxyDetailName.title = proxy.name || "";
     els.proxyDetailUrl.textContent = proxy.base_url;
+    els.proxyDetailUrl.title = proxy.base_url || "";
     setHeroOnline(els.proxyDetailOnline, "proxy", proxy.id);
     els.proxyDetailNotes.textContent = proxy.notes || "";
+    els.proxyDetailNotes.title = proxy.notes || "";
     els.proxyPingResult.hidden = true;
     resetUpstreamForm();
     await loadUpstreams();
@@ -844,10 +855,10 @@
         const already = importedUrls.has(fullUrl.replace(/\/$/, ""));
         row.innerHTML = `
           <div class="info">
-            <strong>${escapeHtml(up.name || up.id)}</strong>
-            <span class="meta">${escapeHtml(up.id)}</span>
-            <span class="meta">${escapeHtml(up.base_url || "")}</span>
-            <span class="meta">${escapeHtml(fullUrl)}</span>
+            <strong title="${escapeHtml(up.name || up.id)}">${escapeHtml(up.name || up.id)}</strong>
+            <span class="meta" title="${escapeHtml(up.id)}">${escapeHtml(up.id)}</span>
+            <span class="meta" title="${escapeHtml(up.base_url || "")}">${escapeHtml(up.base_url || "")}</span>
+            <span class="meta" title="${escapeHtml(fullUrl)}">${escapeHtml(fullUrl)}</span>
             ${already ? `<span class="state-pill running">已导入</span>` : ""}
           </div>
           <div class="row-actions">
@@ -1041,17 +1052,20 @@
         const running = stateName === "running" || stateName === "unhealthy";
         const target = svc.target || svc.jar_path || "—";
         const kind = svc.kind ? String(svc.kind) : "";
-        const msg = svc.message ? `<span class="meta">${escapeHtml(svc.message)}</span>` : "";
         row.innerHTML = `
           <label class="service-check">
             <input type="checkbox" class="svc-check" data-name="${escapeHtml(svc.name || "")}" />
           </label>
           <div class="info">
             <span class="state-pill ${escapeHtml(stateName)}">${escapeHtml(stateName)}</span>
-            <strong>${escapeHtml(svc.name || "")}</strong>
-            <span class="meta">${escapeHtml(target)}</span>
+            <strong title="${escapeHtml(svc.name || "")}">${escapeHtml(svc.name || "")}</strong>
+            <span class="meta" title="${escapeHtml(target)}">${escapeHtml(target)}</span>
             <span class="meta">${escapeHtml(kind)}${svc.pid ? " · pid " + svc.pid : ""}</span>
-            ${msg}
+            ${
+              svc.message
+                ? `<span class="meta" title="${escapeHtml(svc.message)}">${escapeHtml(svc.message)}</span>`
+                : ""
+            }
           </div>
           <div class="row-actions">
             <button type="button" class="btn small" data-act="logs">日志</button>
