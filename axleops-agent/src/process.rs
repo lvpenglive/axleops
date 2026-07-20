@@ -1400,3 +1400,50 @@ pub fn append_marker(path: &Path, line: &str) -> Result<(), ProcessError> {
     writeln!(f, "{line}")?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::tempdir;
+
+    #[test]
+    fn decode_log_bytes_utf8() {
+        assert_eq!(decode_log_bytes(b"hello"), "hello");
+    }
+
+    #[test]
+    fn resolve_work_dir_uses_explicit() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().to_path_buf();
+        let got = resolve_work_dir(Some(path.to_str().unwrap()), None).unwrap();
+        assert_eq!(got, path);
+    }
+
+    #[test]
+    fn tree_pids_include_root() {
+        let pids = ProcessManager::collect_tree_pids(std::process::id());
+        assert!(pids.contains(&std::process::id()));
+    }
+
+    #[test]
+    fn persist_and_read_token_override() {
+        let dir = tempdir().unwrap();
+        let mut cfg = crate::config::Config::default();
+        cfg.data_dir = dir.path().to_path_buf();
+        cfg.persist_token("secret-xyz").unwrap();
+        let text = std::fs::read_to_string(cfg.token_file_path()).unwrap();
+        assert!(text.contains("secret-xyz"));
+    }
+
+    #[test]
+    fn write_marker() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("x.log");
+        append_marker(&path, "marker").unwrap();
+        let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(f, "line").unwrap();
+        let s = std::fs::read_to_string(&path).unwrap();
+        assert!(s.contains("marker"));
+    }
+}

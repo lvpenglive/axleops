@@ -76,6 +76,49 @@ impl ServiceSpec {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolved_kind_prefers_explicit() {
+        let spec = ServiceSpec {
+            name: "x".into(),
+            kind: Some(ServiceKind::Command),
+            jar_path: Some("a.jar".into()),
+            script_path: None,
+            command: Some("echo".into()),
+            interpreter: None,
+            work_dir: None,
+            jvm_args: vec![],
+            app_args: vec![],
+            args: vec![],
+            env: HashMap::new(),
+            health_url: None,
+        };
+        assert_eq!(spec.resolved_kind().unwrap(), ServiceKind::Command);
+    }
+
+    #[test]
+    fn resolved_kind_infers_jar() {
+        let spec = ServiceSpec {
+            name: "x".into(),
+            kind: None,
+            jar_path: Some("a.jar".into()),
+            script_path: None,
+            command: None,
+            interpreter: None,
+            work_dir: None,
+            jvm_args: vec![],
+            app_args: vec![],
+            args: vec![],
+            env: HashMap::new(),
+            health_url: None,
+        };
+        assert_eq!(spec.resolved_kind().unwrap(), ServiceKind::Jar);
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ServiceState {

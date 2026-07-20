@@ -1,7 +1,8 @@
 use crate::auth::AuthUser;
 use crate::models::{
     AgentHealthView, AgentInfo, ApiResponse, CreateUpstreamRequest, HealthInfo,
-    ImportUpstreamRequest, ProxyHealthView, ProxyInfo, RegisterAgentRequest, RegisterProxyRequest,
+    ImportUpstreamRequest, OverviewResponse, OverviewServiceRow, ProxyHealthView, ProxyInfo,
+    RegisterAgentRequest, RegisterProxyRequest, RotateTokenRequest, RotateTokenResponse,
     StartServiceRequest, UpdateAgentRequest, UpdateProxyRequest, UpdateUpstreamRequest,
     UpstreamView,
 };
@@ -31,12 +32,17 @@ pub fn router() -> Router<AppState> {
             axum::routing::put(set_user_disabled),
         )
         .route("/api/v1/audit-logs", get(list_audit_logs))
+        .route("/api/v1/overview/services", get(overview_services))
         .route("/api/v1/agents", get(list_agents).post(register_agent))
         .route(
             "/api/v1/agents/{id}",
             get(get_agent).put(update_agent).delete(delete_agent),
         )
         .route("/api/v1/agents/{id}/ping", get(ping_agent))
+        .route(
+            "/api/v1/agents/{id}/rotate-token",
+            post(rotate_agent_token),
+        )
         .route(
             "/api/v1/agents/{id}/services",
             get(list_services).post(save_service),
@@ -76,6 +82,10 @@ pub fn router() -> Router<AppState> {
             get(get_proxy).put(update_proxy).delete(delete_proxy),
         )
         .route("/api/v1/proxies/{id}/ping", get(ping_proxy))
+        .route(
+            "/api/v1/proxies/{id}/rotate-token",
+            post(rotate_proxy_token),
+        )
         .route(
             "/api/v1/proxies/{id}/upstreams",
             get(list_proxy_upstreams).post(create_proxy_upstream),
@@ -401,6 +411,235 @@ async fn ping_agent(
             },
         ))),
     }
+}
+
+fn new_token() -> String {
+    format!("axle_{}", uuid::Uuid::new_v4().simple())
+}
+
+async fn overview_services(
+    _auth: AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<OverviewResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
+    let agents = state.agents.list().map_err(registry_err)?;
+    let agents_total = agents.len();
+    let mut services = Vec::new();
+    let mut agents_reachable = 0usize;
+
+    let mut handles = Vec::with_capacity(agents.len());
+    for agent in agents {
+        let http = state.http.clone();
+        handles.push(tokio::spawn(async move {
+            let result = crate::proxy::agent_get(&http, &agent, "/api/v1/services").await;
+            (agent, result)
+        }));
+    }
+
+    for handle in handles {
+        let Ok((agent, result)) = handle.await else {
+            continue;
+        };
+        match result {
+            Ok(v) => {
+                agents_reachable += 1;
+                let list = v
+                    .get("data")
+                    .cloned()
+                    .unwrap_or(v);
+                if let Some(arr) = list.as_array() {
+                    for item in arr {
+                        services.push(OverviewServiceRow {
+                            agent_id: agent.id.clone(),
+                            agent_name: agent.name.clone(),
+                            agent_reachable: true,
+                            name: item
+                                .get("name")
+                                .and_then(|x| x.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            state: item
+                                .get("state")
+                                .and_then(|x| x.as_str())
+                                .unwrap_or("unknown")
+                                .to_string(),
+                            kind: item
+                                .get("kind")
+                                .and_then(|x| x.as_str())
+                                .map(|s| s.to_string()),
+                            pid: item.get("pid").and_then(|x| x.as_u64()),
+                            target: item
+                                .get("target")
+                                .or_else(|| item.get("jar_path"))
+                                .and_then(|x| x.as_str())
+                                .map(|s| s.to_string()),
+                            message: item
+                                .get("message")
+                                .and_then(|x| x.as_str())
+                                .map(|s| s.to_string()),
+                            healthy: item.get("healthy").and_then(|x| x.as_bool()),
+                            error: None,
+                        });
+                    }
+                } else {
+                    services.push(OverviewServiceRow {
+                        agent_id: agent.id.clone(),
+                        agent_name: agent.name.clone(),
+                        agent_reachable: true,
+                        name: String::new(),
+                        state: "unknown".into(),
+                        kind: None,
+                        pid: None,
+                        target: None,
+                        message: None,
+                        healthy: None,
+                        error: Some("unexpected services payload".into()),
+                    });
+                }
+            }
+            Err(e) => {
+                services.push(OverviewServiceRow {
+                    agent_id: agent.id.clone(),
+                    agent_name: agent.name.clone(),
+                    agent_reachable: false,
+                    name: String::new(),
+                    state: "unreachable".into(),
+                    kind: None,
+                    pid: None,
+                    target: None,
+                    message: None,
+                    healthy: None,
+                    error: Some(e.to_string()),
+                });
+            }
+        }
+    }
+
+    Ok(Json(ApiResponse::ok(
+        "ok",
+        OverviewResponse {
+            agents_total,
+            agents_reachable,
+            services,
+        },
+    )))
+}
+
+async fn rotate_agent_token(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<RotateTokenRequest>,
+) -> Result<Json<ApiResponse<RotateTokenResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
+    let agent = state.agents.get(&id).map_err(registry_err)?;
+    let mut token = new_token();
+    let mut synced = false;
+    let message = if req.sync {
+        match crate::proxy::agent_post_json(
+            &state.http,
+            &agent,
+            "/api/v1/auth/rotate-token",
+            &serde_json::json!({}),
+        )
+        .await
+        {
+            Ok(v) => {
+                if let Some(t) = v
+                    .pointer("/data/token")
+                    .and_then(|x| x.as_str())
+                    .map(|s| s.to_string())
+                {
+                    token = t;
+                    synced = true;
+                    Some("remote agent token rotated".into())
+                } else {
+                    Some(
+                        "agent responded but token missing; registry updated with new local token"
+                            .into(),
+                    )
+                }
+            }
+            Err(e) => Some(format!(
+                "sync failed ({e}); registry token updated — copy into agent config"
+            )),
+        }
+    } else {
+        Some("registry token updated — copy into agent/proxy if needed".into())
+    };
+
+    let updated = state
+        .agents
+        .update(
+            &id,
+            UpdateAgentRequest {
+                name: None,
+                base_url: None,
+                token: Some(token.clone()),
+                tags: None,
+                proxy_id: None,
+            },
+        )
+        .map_err(registry_err)?;
+
+    audit(
+        &state,
+        &auth.0,
+        "agent.rotate_token",
+        "agent",
+        &updated.id,
+        if synced { "synced" } else { "local" },
+    );
+
+    Ok(Json(ApiResponse::ok(
+        "rotated",
+        RotateTokenResponse {
+            id: updated.id,
+            token,
+            synced,
+            message,
+        },
+    )))
+}
+
+async fn rotate_proxy_token(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(_req): Json<RotateTokenRequest>,
+) -> Result<Json<ApiResponse<RotateTokenResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
+    let token = new_token();
+    let updated = state
+        .proxies
+        .update(
+            &id,
+            UpdateProxyRequest {
+                name: None,
+                base_url: None,
+                token: Some(token.clone()),
+                notes: None,
+            },
+        )
+        .map_err(proxy_registry_err)?;
+
+    audit(
+        &state,
+        &auth.0,
+        "proxy.rotate_token",
+        "proxy",
+        &updated.id,
+        "local",
+    );
+
+    Ok(Json(ApiResponse::ok(
+        "rotated",
+        RotateTokenResponse {
+            id: updated.id,
+            token,
+            synced: false,
+            message: Some(
+                "proxy registry token updated — update proxy config.toml and reload".into(),
+            ),
+        },
+    )))
 }
 
 async fn list_services(

@@ -2,13 +2,17 @@
 # Or override with env:
 #   AXLEOPS_ADMIN_BIND / AXLEOPS_ADMIN_TOKEN / AXLEOPS_ADMIN_DATA_DIR
 #   AXLEOPS_ADMIN_SEED_USERNAME / AXLEOPS_ADMIN_SEED_PASSWORD
-#   AXLEOPS_ADMIN_SESSION_TTL_HOURS
+#   AXLEOPS_ADMIN_SESSION_TTL_HOURS / AXLEOPS_ADMIN_CORS_ORIGINS
 #
 # Web 控制台：用户名/密码登录（会话头 X-AxleOps-Session / Bearer）。
 # token：仍可作为自动化用的服务令牌（请求头 X-AxleOps-Token），不用于浏览器登录。
 # 首次无用户时按 seed_username / seed_password 创建管理员（务必改掉默认值）。
 # 数据：<data_dir>/axleops.db（Agent / Proxy / users / sessions / audit，SQLite bundled）。
 # 静态页：工作目录下 static/（与二进制同级启动）。
+#
+# 生产建议：
+#   - bind 收紧到内网/本机，或前置反向代理
+#   - cors_origins 填具体前端来源；留空或 ["*"] 为开发期宽松模式
 
 bind = "0.0.0.0:9000"
 token = "change-me-to-a-long-secret"
@@ -16,3 +20,7 @@ data_dir = "./data"
 seed_username = "admin"
 seed_password = "change-me-admin"
 session_ttl_hours = 24
+
+# 开发：留空即可（等同 permissive）。
+# 生产示例：cors_origins = ["https://ops.example.com"]
+cors_origins = []

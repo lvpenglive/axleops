@@ -20,6 +20,10 @@ chrono = { version = "0.4", features = ["serde"] }
 sysinfo = "0.33"
 encoding_rs = "0.8"
 ureq = "2"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

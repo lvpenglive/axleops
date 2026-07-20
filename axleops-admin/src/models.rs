@@ -195,3 +195,50 @@ pub struct AgentHealthView {
     pub reachable: bool,
     pub detail: serde_json::Value,
 }
+
+/// One service row in the cross-agent overview.
+#[derive(Debug, Serialize)]
+pub struct OverviewServiceRow {
+    pub agent_id: String,
+    pub agent_name: String,
+    pub agent_reachable: bool,
+    pub name: String,
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub healthy: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OverviewResponse {
+    pub agents_total: usize,
+    pub agents_reachable: usize,
+    pub services: Vec<OverviewServiceRow>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RotateTokenRequest {
+    /// When true, ask the remote Agent to rotate and persist the returned token.
+    /// Ignored for proxies (registry-only).
+    #[serde(default)]
+    pub sync: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RotateTokenResponse {
+    pub id: String,
+    /// New token shown once — copy into Agent/Proxy config if sync was false.
+    pub token: String,
+    pub synced: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}

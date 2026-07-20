@@ -16,6 +16,10 @@ pub struct Config {
     pub seed_password: String,
     /// Session lifetime for username/password login
     pub session_ttl_hours: u64,
+    /// Browser CORS allow-list.
+    /// Empty or containing `"*"` → permissive (dev-friendly).
+    /// Otherwise only listed origins (e.g. `["https://ops.example.com"]`).
+    pub cors_origins: Vec<String>,
 }
 
 impl Default for Config {
@@ -27,6 +31,7 @@ impl Default for Config {
             seed_username: "admin".into(),
             seed_password: "change-me-admin".into(),
             session_ttl_hours: 24,
+            cors_origins: Vec::new(),
         }
     }
 }
@@ -59,8 +64,23 @@ impl Config {
                 cfg.session_ttl_hours = n;
             }
         }
+        if let Ok(v) = std::env::var("AXLEOPS_ADMIN_CORS_ORIGINS") {
+            cfg.cors_origins = v
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
 
         fs::create_dir_all(&cfg.data_dir)?;
         Ok(cfg)
+    }
+
+    pub fn cors_is_permissive(&self) -> bool {
+        self.cors_origins.is_empty()
+            || self
+                .cors_origins
+                .iter()
+                .any(|o| o.trim() == "*")
     }
 }

@@ -30,6 +30,14 @@ jobs:
             axleops-admin
             axleops-proxy
 
+      - name: Test agent
+        run: cargo test
+        working-directory: axleops-agent
+
+      - name: Test admin
+        run: cargo test
+        working-directory: axleops-admin
+
       - name: Build agent
         run: cargo build --release
         working-directory: axleops-agent

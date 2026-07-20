@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/app.css?v=20260720layout" />
+  <link rel="stylesheet" href="/app.css?v=20260720v03" />
   <script>
     (function () {
       try {
@@ -89,12 +89,24 @@
     <main class="layout">
       <aside class="rail enter">
         <div class="rail-tabs" role="tablist">
-          <button type="button" class="rail-tab active" data-rail="agents" id="tab-agents">Agents</button>
+          <button type="button" class="rail-tab active" data-rail="overview" id="tab-overview">总览</button>
+          <button type="button" class="rail-tab" data-rail="agents" id="tab-agents">Agents</button>
           <button type="button" class="rail-tab" data-rail="proxies" id="tab-proxies">Proxies</button>
           <button type="button" class="rail-tab hidden" data-rail="system" id="tab-system">系统</button>
         </div>
 
-        <div id="rail-agents" class="rail-pane">
+        <div id="rail-overview" class="rail-pane">
+          <div class="rail-head">
+            <div>
+              <h2>总览</h2>
+              <p class="rail-count">跨 Agent 服务状态</p>
+            </div>
+            <button type="button" id="btn-reload-overview" class="btn small ghost">刷新</button>
+          </div>
+          <p class="muted form-hint">汇总所有已登记 Agent 上的服务；离线机器会单独标出。</p>
+        </div>
+
+        <div id="rail-agents" class="rail-pane hidden">
           <div class="rail-head">
             <div>
               <h2>Agents</h2>
@@ -207,6 +219,7 @@
             <div class="hero-actions">
               <button type="button" id="btn-ping-proxy" class="btn">Ping</button>
               <button type="button" id="btn-reload-upstreams" class="btn">刷新上游</button>
+              <button type="button" id="btn-rotate-proxy-token" class="btn ghost">轮换 Token</button>
               <button type="button" id="btn-delete-proxy" class="btn danger">删除</button>
             </div>
           </header>
@@ -251,6 +264,28 @@
           </div>
         </div>
 
+        <div id="panel-overview" class="workspace enter hidden">
+          <header class="hero">
+            <div class="hero-text">
+              <p class="kicker">Fleet</p>
+              <h2>服务总览</h2>
+              <div class="hero-meta">
+                <p id="overview-summary" class="muted">加载中…</p>
+              </div>
+            </div>
+            <div class="hero-actions">
+              <button type="button" id="btn-refresh-overview" class="btn">刷新</button>
+            </div>
+          </header>
+          <section class="surface">
+            <div id="overview-list" class="service-list"></div>
+            <p id="overview-empty" class="empty-state inline" hidden>
+              <span class="empty-title">暂无服务</span>
+              <span class="muted">登记 Agent 并启动服务后会出现在这里</span>
+            </p>
+          </section>
+        </div>
+
         <div id="panel-detail" class="workspace enter hidden">
           <header class="hero">
             <div class="hero-text">
@@ -264,6 +299,7 @@
             </div>
             <div class="hero-actions">
               <button type="button" id="btn-ping" class="btn">Ping</button>
+              <button type="button" id="btn-rotate-agent-token" class="btn ghost">轮换 Token</button>
               <button type="button" id="btn-delete-agent" class="btn danger">删除</button>
             </div>
           </header>
@@ -446,6 +482,6 @@
     <div id="toast" class="toast" hidden></div>
   </div>
 
-  <script src="/app.js?v=20260720layout"></script>
+  <script src="/app.js?v=20260720v03"></script>
 </body>
 </html>

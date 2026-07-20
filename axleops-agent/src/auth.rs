@@ -19,7 +19,12 @@ impl FromRequestParts<AppState> for AuthToken {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
 
-        if provided.is_empty() || provided != state.config.token {
+        let expected = state
+            .token
+            .read()
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "token lock poisoned"))?;
+
+        if provided.is_empty() || provided != expected.as_str() {
             return Err((
                 StatusCode::UNAUTHORIZED,
                 "invalid or missing X-AxleOps-Token",

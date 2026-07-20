@@ -48,12 +48,22 @@
     btnPassword: document.getElementById("btn-password"),
     currentUser: document.getElementById("current-user"),
     btnToggleToken: document.getElementById("btn-toggle-token"),
+    tabOverview: document.getElementById("tab-overview"),
     tabAgents: document.getElementById("tab-agents"),
     tabProxies: document.getElementById("tab-proxies"),
     tabSystem: document.getElementById("tab-system"),
+    railOverview: document.getElementById("rail-overview"),
     railAgents: document.getElementById("rail-agents"),
     railProxies: document.getElementById("rail-proxies"),
     railSystem: document.getElementById("rail-system"),
+    panelOverview: document.getElementById("panel-overview"),
+    overviewList: document.getElementById("overview-list"),
+    overviewEmpty: document.getElementById("overview-empty"),
+    overviewSummary: document.getElementById("overview-summary"),
+    btnReloadOverview: document.getElementById("btn-reload-overview"),
+    btnRefreshOverview: document.getElementById("btn-refresh-overview"),
+    btnRotateAgentToken: document.getElementById("btn-rotate-agent-token"),
+    btnRotateProxyToken: document.getElementById("btn-rotate-proxy-token"),
     btnShowUsers: document.getElementById("btn-show-users"),
     btnShowAudit: document.getElementById("btn-show-audit"),
     panelPassword: document.getElementById("panel-password"),
@@ -150,7 +160,7 @@
   const ONLINE_INTERVAL_MS = 15000;
 
   const state = {
-    rail: "agents",
+    rail: "overview",
     me: null,
     agents: [],
     proxies: [],
@@ -359,6 +369,7 @@
     els.panelRegister.classList.add("hidden");
     els.panelProxyRegister.classList.add("hidden");
     els.panelProxyDetail.classList.add("hidden");
+    if (els.panelOverview) els.panelOverview.classList.add("hidden");
     if (els.panelPassword) els.panelPassword.classList.add("hidden");
     if (els.panelUsers) els.panelUsers.classList.add("hidden");
     if (els.panelAudit) els.panelAudit.classList.add("hidden");
@@ -366,12 +377,130 @@
 
   function setRail(rail) {
     state.rail = rail;
+    if (els.tabOverview) els.tabOverview.classList.toggle("active", rail === "overview");
     els.tabAgents.classList.toggle("active", rail === "agents");
     els.tabProxies.classList.toggle("active", rail === "proxies");
     if (els.tabSystem) els.tabSystem.classList.toggle("active", rail === "system");
+    if (els.railOverview) els.railOverview.classList.toggle("hidden", rail !== "overview");
     els.railAgents.classList.toggle("hidden", rail !== "agents");
     els.railProxies.classList.toggle("hidden", rail !== "proxies");
     if (els.railSystem) els.railSystem.classList.toggle("hidden", rail !== "system");
+  }
+
+  function showOverview() {
+    state.selectedId = null;
+    state.selectedProxyId = null;
+    highlightAgent(null);
+    highlightProxy(null);
+    setRail("overview");
+    hideMainPanels();
+    if (els.panelOverview) els.panelOverview.classList.remove("hidden");
+    loadOverview();
+  }
+
+  async function loadOverview() {
+    if (!els.overviewList) return;
+    els.overviewList.innerHTML = "";
+    try {
+      const res = await api("/api/v1/overview/services");
+      const data = res.data || {};
+      const list = Array.isArray(data.services) ? data.services : [];
+      const total = data.agents_total || 0;
+      const reachable = data.agents_reachable || 0;
+      if (els.overviewSummary) {
+        els.overviewSummary.textContent = `Agent ${reachable}/${total} 可达 · 服务行 ${list.length}`;
+      }
+      const rows = list.filter((r) => r.name || r.error);
+      if (els.overviewEmpty) els.overviewEmpty.hidden = rows.length > 0;
+      rows.forEach((row, i) => {
+        const el = document.createElement("div");
+        el.className = "service-item";
+        el.style.animationDelay = `${i * 30}ms`;
+        const stateName = String(row.state || "unknown").toLowerCase();
+        const title = row.name
+          ? `${row.agent_name} / ${row.name}`
+          : `${row.agent_name}（不可达）`;
+        const meta = row.error
+          ? row.error
+          : [row.target || "", row.kind || "", row.pid ? `pid ${row.pid}` : "", row.message || ""]
+              .filter(Boolean)
+              .join(" · ");
+        el.innerHTML = `
+          <div class="info">
+            <span class="state-pill ${escapeHtml(stateName)}">${escapeHtml(stateName)}</span>
+            <strong title="${escapeHtml(title)}">${escapeHtml(title)}</strong>
+            <span class="meta" title="${escapeHtml(meta)}">${escapeHtml(meta)}</span>
+          </div>
+          <div class="row-actions">
+            <button type="button" class="btn small" data-act="open">打开</button>
+          </div>`;
+        el.querySelector("[data-act=open]").addEventListener("click", () => {
+          if (row.agent_id) selectAgent(row.agent_id);
+        });
+        els.overviewList.appendChild(el);
+      });
+    } catch (e) {
+      if (els.overviewSummary) els.overviewSummary.textContent = "加载失败";
+      if (els.overviewEmpty) els.overviewEmpty.hidden = false;
+      showToast(e.message, true);
+    }
+  }
+
+  async function rotateAgentToken() {
+    if (!state.selectedId) return;
+    if (!confirm("轮换该 Agent 在 Admin 中的 Token？\n将尝试同步到远端 Agent（sync）。请保存返回的新 Token。")) {
+      return;
+    }
+    try {
+      const res = await api(`/api/v1/agents/${state.selectedId}/rotate-token`, {
+        method: "POST",
+        body: JSON.stringify({ sync: true }),
+      });
+      const data = res.data || {};
+      const token = data.token || "";
+      const msg = [
+        data.synced ? "已同步远端 Agent" : "仅更新了 Admin 登记",
+        data.message || "",
+        token ? `新 Token：\n${token}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+      showToast(msg, !data.synced);
+      if (token && navigator.clipboard) {
+        try {
+          await navigator.clipboard.writeText(token);
+          showToast("新 Token 已复制到剪贴板");
+        } catch (_) {}
+      }
+      await loadAgents();
+    } catch (e) {
+      showToast(e.message, true);
+    }
+  }
+
+  async function rotateProxyToken() {
+    if (!state.selectedProxyId) return;
+    if (!confirm("轮换该 Proxy 在 Admin 中的 Token？\n需同步修改 Proxy 的 config.toml 并重启/重载。")) {
+      return;
+    }
+    try {
+      const res = await api(`/api/v1/proxies/${state.selectedProxyId}/rotate-token`, {
+        method: "POST",
+        body: JSON.stringify({ sync: false }),
+      });
+      const data = res.data || {};
+      const token = data.token || "";
+      showToast(token ? `新 Token：\n${token}` : "已轮换", true);
+      if (token && navigator.clipboard) {
+        try {
+          await navigator.clipboard.writeText(token);
+          showToast("新 Token 已复制到剪贴板");
+        } catch (_) {}
+      }
+      await loadProxies();
+    } catch (e) {
+      showToast(e.message, true);
+    }
   }
 
   function showWelcome() {
@@ -1687,11 +1816,22 @@
     try {
       await refreshAll();
       await probeAllOnline();
+      if (state.rail === "overview") await loadOverview();
       showToast("已刷新");
     } catch (e) {
       showToast(e.message, true);
     }
   });
+
+  if (els.tabOverview) {
+    els.tabOverview.addEventListener("click", () => showOverview());
+  }
+  if (els.btnReloadOverview) {
+    els.btnReloadOverview.addEventListener("click", () => loadOverview());
+  }
+  if (els.btnRefreshOverview) {
+    els.btnRefreshOverview.addEventListener("click", () => loadOverview());
+  }
 
   els.tabAgents.addEventListener("click", () => {
     setRail("agents");
@@ -1846,6 +1986,12 @@
 
   els.btnPing.addEventListener("click", pingAgent);
   els.btnDeleteAgent.addEventListener("click", deleteAgent);
+  if (els.btnRotateAgentToken) {
+    els.btnRotateAgentToken.addEventListener("click", rotateAgentToken);
+  }
+  if (els.btnRotateProxyToken) {
+    els.btnRotateProxyToken.addEventListener("click", rotateProxyToken);
+  }
   els.btnPingProxy.addEventListener("click", pingProxy);
   els.btnDeleteProxy.addEventListener("click", deleteProxy);
   els.btnReloadUpstreams.addEventListener("click", loadUpstreams);
@@ -1947,7 +2093,7 @@
       showApp();
       await refreshAll();
       startOnlinePoll();
-      showWelcome();
+      showOverview();
     } catch {
       clearToken();
       showLogin();

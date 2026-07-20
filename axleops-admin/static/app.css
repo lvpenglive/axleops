@@ -686,7 +686,7 @@ input:focus, select:focus, textarea:focus {
 
 .rail-tabs {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(3.8rem, 1fr));
   gap: 0.35rem;
   margin-bottom: 0.95rem;
   padding: 0.25rem;

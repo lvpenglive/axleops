@@ -97,6 +97,23 @@ impl Config {
         fs::create_dir_all(cfg.data_dir.join("logs"))?;
         fs::create_dir_all(cfg.data_dir.join("services"))?;
 
+        // Hot-rotated token overrides config.toml / env until next rotate.
+        let token_file = cfg.data_dir.join("auth.token");
+        if let Ok(t) = fs::read_to_string(&token_file) {
+            let t = t.trim();
+            if !t.is_empty() {
+                cfg.token = t.to_string();
+            }
+        }
+
         Ok(cfg)
+    }
+
+    pub fn token_file_path(&self) -> PathBuf {
+        self.data_dir.join("auth.token")
+    }
+
+    pub fn persist_token(&self, token: &str) -> std::io::Result<()> {
+        fs::write(self.token_file_path(), format!("{token}\n"))
     }
 }

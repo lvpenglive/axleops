@@ -12,6 +12,7 @@ use std::sync::Arc;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/health", get(health))
+        .route("/api/v1/auth/rotate-token", post(rotate_token))
         .route("/api/v1/services", get(list_services).post(save_service))
         .route("/api/v1/services/{name}/status", get(service_status))
         .route("/api/v1/services/{name}/spec", get(get_service_spec))
@@ -34,6 +35,33 @@ async fn health() -> Json<ApiResponse<HealthInfo>> {
             version: env!("CARGO_PKG_VERSION"),
         },
     ))
+}
+
+async fn rotate_token(
+    _auth: AuthToken,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, (StatusCode, Json<ApiResponse<()>>)> {
+    let new_token = format!("axle_{}", uuid::Uuid::new_v4().simple());
+    if let Err(e) = state.config.persist_token(&new_token) {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<()>::err(format!("persist token failed: {e}"))),
+        ));
+    }
+    {
+        let mut guard = state.token.write().map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()>::err("token lock poisoned")),
+            )
+        })?;
+        *guard = new_token.clone();
+    }
+    tracing::warn!("agent token rotated; clients must use the new token");
+    Ok(Json(ApiResponse::ok(
+        "rotated",
+        serde_json::json!({ "token": new_token }),
+    )))
 }
 
 async fn run_blocking<T, F>(

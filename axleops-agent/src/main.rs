@@ -6,7 +6,7 @@ mod routes;
 
 use config::Config;
 use process::ProcessManager;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
@@ -14,6 +14,8 @@ use tracing_subscriber::EnvFilter;
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<Config>,
+    /// Live auth token (may be hot-rotated; also persisted under data_dir/auth.token).
+    pub token: Arc<RwLock<String>>,
     pub processes: Arc<ProcessManager>,
 }
 
@@ -25,6 +27,7 @@ async fn main() -> anyhow::Result<()> {
 
     let config = Config::load()?;
     let bind = config.bind.clone();
+    let token = Arc::new(RwLock::new(config.token.clone()));
     tracing::info!(
         bind = %bind,
         data_dir = %config.data_dir.display(),
@@ -56,6 +59,7 @@ async fn main() -> anyhow::Result<()> {
 
     let state = AppState {
         processes,
+        token,
         config: Arc::new(config),
     };
 

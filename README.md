@@ -50,14 +50,15 @@ Admin 控制台左侧可切换 **Agents / Proxies**：登记多个 Proxy 后 Pin
 - ~~**用户名 / 密码登录**（会话鉴权，替代整站共用 Admin Token 登录）~~
 - ~~**改密**；超管可创建 / 禁用用户（种子管理员可从配置引导）~~
 - ~~**操作审计**：绑定用户（谁、何时、对哪台 Agent/Proxy 做了启停 / 导入等）~~
-- Agent / Proxy 侧 Token 轮换、可选按 Agent 独立 token（机器信任与用户会话分离）
-- 生产绑定与 CORS 策略
-- 跨 Agent 服务状态总览
+- ~~Agent / Proxy 侧 Token 轮换（Admin 登记轮换 + Agent `rotate-token` 热更）~~
+- ~~生产 CORS 策略（`cors_origins`；空/`*` 为开发宽松模式）~~
+- ~~跨 Agent 服务状态总览~~
 - ~~Agent 重启后按规格拉起「应运行」服务~~
 - ~~**业务进程崩溃自动拉起**（Agent 侧看门狗：PID 消失后按规格拉起，可配置间隔；探活 Unhealthy 暂不自动杀进程以免抖动）~~
-- 基础自动化测试（进程生命周期 + 代理冒烟）
+- ~~基础自动化测试（Agent 单元测试 + CI `cargo test`）~~
 
 已落地补充：Admin 仍接受 `X-AxleOps-Token` 作为自动化服务令牌；浏览器走会话（`X-AxleOps-Session` / Bearer）。
+控制台「总览」聚合各 Agent 服务；Admin 可轮换登记 Token（可选 sync 到 Agent）；`cors_origins` 控制生产 CORS；Agent 侧 `POST /api/v1/auth/rotate-token` + `data/auth.token` 热更。
 
 ### v0.4 — 交付与部署增强
 
