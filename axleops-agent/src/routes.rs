@@ -1,11 +1,13 @@
 use crate::auth::AuthToken;
 use crate::models::{ApiResponse, HealthInfo, ServiceSpec, ServiceStatus};
+use crate::process::{ProcessError, ProcessManager};
 use crate::AppState;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde::Deserialize;
+use std::sync::Arc;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -34,25 +36,51 @@ async fn health() -> Json<ApiResponse<HealthInfo>> {
     ))
 }
 
+async fn run_blocking<T, F>(
+    processes: Arc<ProcessManager>,
+    f: F,
+) -> Result<T, (StatusCode, Json<ApiResponse<()>>)>
+where
+    T: Send + 'static,
+    F: FnOnce(Arc<ProcessManager>) -> Result<T, ProcessError> + Send + 'static,
+{
+    tokio::task::spawn_blocking(move || f(processes))
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()>::err(format!("blocking task failed: {e}"))),
+            )
+        })?
+        .map_err(|e| map_process_err(e))
+}
+
+fn map_process_err(e: ProcessError) -> (StatusCode, Json<ApiResponse<()>>) {
+    let status = match &e {
+        ProcessError::AlreadyRunning(_) | ProcessError::NotRunning => StatusCode::CONFLICT,
+        ProcessError::Other(_) | ProcessError::InvalidPidFile | ProcessError::Io(_) => {
+            // Keep prior behavior: start/stop conflicts vs save bad requests handled per-route.
+            StatusCode::CONFLICT
+        }
+    };
+    (status, Json(ApiResponse::<()>::err(e.to_string())))
+}
+
 async fn list_services(
     _auth: AuthToken,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<Vec<ServiceStatus>>>, (StatusCode, Json<ApiResponse<()>>)> {
-    match state.processes.list_statuses() {
-        Ok(list) => Ok(Json(ApiResponse::ok("ok", list))),
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse::<()>::err(e.to_string())),
-        )),
-    }
+    let list = run_blocking(state.processes.clone(), |p| p.list_statuses()).await?;
+    Ok(Json(ApiResponse::ok("ok", list)))
 }
 
 async fn service_status(
     _auth: AuthToken,
     State(state): State<AppState>,
     Path(name): Path<String>,
-) -> Json<ApiResponse<ServiceStatus>> {
-    Json(ApiResponse::ok("ok", state.processes.status(&name)))
+) -> Result<Json<ApiResponse<ServiceStatus>>, (StatusCode, Json<ApiResponse<()>>)> {
+    let status = run_blocking(state.processes.clone(), move |p| Ok(p.status(&name))).await?;
+    Ok(Json(ApiResponse::ok("ok", status)))
 }
 
 async fn get_service_spec(
@@ -60,12 +88,9 @@ async fn get_service_spec(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<ApiResponse<ServiceSpec>>, (StatusCode, Json<ApiResponse<()>>)> {
-    match state.processes.get_spec(&name) {
+    match run_blocking(state.processes.clone(), move |p| p.get_spec(&name)).await {
         Ok(spec) => Ok(Json(ApiResponse::ok("ok", spec))),
-        Err(e) => Err((
-            StatusCode::NOT_FOUND,
-            Json(ApiResponse::<()>::err(e.to_string())),
-        )),
+        Err((_, json)) => Err((StatusCode::NOT_FOUND, json)),
     }
 }
 
@@ -91,12 +116,9 @@ async fn save_service(
     Json(spec): Json<ServiceSpec>,
 ) -> Result<Json<ApiResponse<ServiceStatus>>, (StatusCode, Json<ApiResponse<()>>)> {
     validate_spec(&spec)?;
-    match state.processes.save(&spec) {
+    match run_blocking(state.processes.clone(), move |p| p.save(&spec)).await {
         Ok(status) => Ok(Json(ApiResponse::ok("saved", status))),
-        Err(e) => Err((
-            StatusCode::BAD_REQUEST,
-            Json(ApiResponse::<()>::err(e.to_string())),
-        )),
+        Err((_, json)) => Err((StatusCode::BAD_REQUEST, json)),
     }
 }
 
@@ -108,12 +130,9 @@ async fn save_service_named(
 ) -> Result<Json<ApiResponse<ServiceStatus>>, (StatusCode, Json<ApiResponse<()>>)> {
     spec.name = name;
     validate_spec(&spec)?;
-    match state.processes.save(&spec) {
+    match run_blocking(state.processes.clone(), move |p| p.save(&spec)).await {
         Ok(status) => Ok(Json(ApiResponse::ok("saved", status))),
-        Err(e) => Err((
-            StatusCode::BAD_REQUEST,
-            Json(ApiResponse::<()>::err(e.to_string())),
-        )),
+        Err((_, json)) => Err((StatusCode::BAD_REQUEST, json)),
     }
 }
 
@@ -122,12 +141,9 @@ async fn remove_service(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<ApiResponse<ServiceStatus>>, (StatusCode, Json<ApiResponse<()>>)> {
-    match state.processes.remove(&name) {
+    match run_blocking(state.processes.clone(), move |p| p.remove(&name)).await {
         Ok(status) => Ok(Json(ApiResponse::ok("removed", status))),
-        Err(e) => Err((
-            StatusCode::BAD_REQUEST,
-            Json(ApiResponse::<()>::err(e.to_string())),
-        )),
+        Err((_, json)) => Err((StatusCode::BAD_REQUEST, json)),
     }
 }
 
@@ -137,13 +153,8 @@ async fn start_service(
     Json(spec): Json<ServiceSpec>,
 ) -> Result<Json<ApiResponse<ServiceStatus>>, (StatusCode, Json<ApiResponse<()>>)> {
     validate_spec(&spec)?;
-    match state.processes.start(&spec) {
-        Ok(status) => Ok(Json(ApiResponse::ok("started", status))),
-        Err(e) => Err((
-            StatusCode::CONFLICT,
-            Json(ApiResponse::<()>::err(e.to_string())),
-        )),
-    }
+    let status = run_blocking(state.processes.clone(), move |p| p.start(&spec)).await?;
+    Ok(Json(ApiResponse::ok("started", status)))
 }
 
 async fn start_saved_service(
@@ -151,13 +162,8 @@ async fn start_saved_service(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<ApiResponse<ServiceStatus>>, (StatusCode, Json<ApiResponse<()>>)> {
-    match state.processes.start_saved(&name) {
-        Ok(status) => Ok(Json(ApiResponse::ok("started", status))),
-        Err(e) => Err((
-            StatusCode::CONFLICT,
-            Json(ApiResponse::<()>::err(e.to_string())),
-        )),
-    }
+    let status = run_blocking(state.processes.clone(), move |p| p.start_saved(&name)).await?;
+    Ok(Json(ApiResponse::ok("started", status)))
 }
 
 async fn stop_service(
@@ -165,13 +171,8 @@ async fn stop_service(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<ApiResponse<ServiceStatus>>, (StatusCode, Json<ApiResponse<()>>)> {
-    match state.processes.stop(&name) {
-        Ok(status) => Ok(Json(ApiResponse::ok("stopped", status))),
-        Err(e) => Err((
-            StatusCode::CONFLICT,
-            Json(ApiResponse::<()>::err(e.to_string())),
-        )),
-    }
+    let status = run_blocking(state.processes.clone(), move |p| p.stop(&name)).await?;
+    Ok(Json(ApiResponse::ok("stopped", status)))
 }
 
 async fn restart_service(
@@ -179,13 +180,8 @@ async fn restart_service(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<ApiResponse<ServiceStatus>>, (StatusCode, Json<ApiResponse<()>>)> {
-    match state.processes.restart(&name) {
-        Ok(status) => Ok(Json(ApiResponse::ok("restarted", status))),
-        Err(e) => Err((
-            StatusCode::CONFLICT,
-            Json(ApiResponse::<()>::err(e.to_string())),
-        )),
-    }
+    let status = run_blocking(state.processes.clone(), move |p| p.restart(&name)).await?;
+    Ok(Json(ApiResponse::ok("restarted", status)))
 }
 
 #[derive(Debug, Deserialize)]
@@ -205,11 +201,7 @@ async fn service_logs(
     Path(name): Path<String>,
     Query(q): Query<LogQuery>,
 ) -> Result<Json<ApiResponse<String>>, (StatusCode, Json<ApiResponse<()>>)> {
-    match state.processes.tail_log(&name, q.bytes) {
-        Ok(content) => Ok(Json(ApiResponse::ok("ok", content))),
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse::<()>::err(e.to_string())),
-        )),
-    }
+    let content = run_blocking(state.processes.clone(), move |p| p.tail_log(&name, q.bytes)).await
+        .map_err(|(_, json)| (StatusCode::INTERNAL_SERVER_ERROR, json))?;
+    Ok(Json(ApiResponse::ok("ok", content)))
 }

@@ -1,6 +1,40 @@
 (() => {
   const SESSION_KEY = "axleops_admin_session";
   const USER_KEY = "axleops_admin_user";
+  const THEME_KEY = "axleops_theme";
+  const THEMES = [
+    { id: "dark", label: "深色" },
+    { id: "light", label: "浅色" },
+    { id: "contrast", label: "高对比" },
+  ];
+
+  function currentThemeId() {
+    const id = document.documentElement.getAttribute("data-theme") || "dark";
+    return THEMES.some((t) => t.id === id) ? id : "dark";
+  }
+
+  function applyTheme(id) {
+    const theme = THEMES.find((t) => t.id === id) || THEMES[0];
+    document.documentElement.setAttribute("data-theme", theme.id);
+    try {
+      localStorage.setItem(THEME_KEY, theme.id);
+    } catch (_) {}
+    document.querySelectorAll("[data-theme-toggle]").forEach((btn) => {
+      btn.textContent = theme.label;
+      btn.title = `主题：${theme.label}（点击切换）`;
+      btn.setAttribute("aria-label", `当前主题 ${theme.label}，点击切换`);
+    });
+  }
+
+  function cycleTheme() {
+    const i = THEMES.findIndex((t) => t.id === currentThemeId());
+    applyTheme(THEMES[(i + 1) % THEMES.length].id);
+  }
+
+  applyTheme(currentThemeId());
+  document.querySelectorAll("[data-theme-toggle]").forEach((btn) => {
+    btn.addEventListener("click", cycleTheme);
+  });
 
   const els = {
     viewLogin: document.getElementById("view-login"),
@@ -83,6 +117,7 @@
     btnResetUpstreamForm: document.getElementById("btn-reset-upstream-form"),
     serviceList: document.getElementById("service-list"),
     serviceEmpty: document.getElementById("service-empty"),
+    serviceBatchBar: document.getElementById("service-batch-bar"),
     serviceCount: document.getElementById("service-count"),
     agentCount: document.getElementById("agent-count"),
     proxyCount: document.getElementById("proxy-count"),
@@ -150,9 +185,10 @@
     els.toast.textContent = message;
     els.toast.classList.toggle("error", isError);
     clearTimeout(showToast._t);
+    const hold = isError && String(message).includes("\n") ? 7000 : 2600;
     showToast._t = setTimeout(() => {
       els.toast.hidden = true;
-    }, 2600);
+    }, hold);
   }
 
   function setBusy(btn, busy, label) {
@@ -1033,6 +1069,7 @@
       const list = Array.isArray(data) ? data : [];
       if (els.serviceCount) els.serviceCount.textContent = String(list.length);
       els.serviceEmpty.hidden = list.length > 0;
+      if (els.serviceBatchBar) els.serviceBatchBar.hidden = list.length === 0;
       list.forEach((svc, i) => {
         const row = document.createElement("div");
         row.className = "service-item";
@@ -1120,7 +1157,8 @@
       });
       syncBatchBar();
     } catch (e) {
-      els.serviceEmpty.hidden = true;
+      els.serviceEmpty.hidden = false;
+      if (els.serviceBatchBar) els.serviceBatchBar.hidden = true;
       if (els.serviceCount) els.serviceCount.textContent = "0";
       syncBatchBar();
       showToast(e.message, true);
@@ -1179,6 +1217,8 @@
       fail > 0
     );
     if (errors.length) {
+      const detail = errors.slice(0, 5).join("\n") + (errors.length > 5 ? `\n…共 ${errors.length} 条` : "");
+      showToast(detail, true);
       console.warn(errors.join("\n"));
     }
     await loadServices();
@@ -1449,11 +1489,13 @@
       row.className = "service-item";
       const disabled = !!u.disabled;
       row.innerHTML = `
-        <div class="service-main">
-          <div class="service-name">${u.username}</div>
-          <div class="service-meta muted">${u.role}${disabled ? " · 已禁用" : ""}</div>
+        <div class="info">
+          <strong title="${escapeHtml(u.username)}">${escapeHtml(u.username)}</strong>
+          <span class="meta" title="${escapeHtml(u.role)}${disabled ? " · 已禁用" : ""}">${escapeHtml(u.role)}${
+        disabled ? " · 已禁用" : ""
+      }</span>
         </div>
-        <div class="service-actions">
+        <div class="row-actions">
           <button type="button" class="btn small" data-act="toggle">${disabled ? "启用" : "禁用"}</button>
         </div>`;
       row.querySelector("[data-act=toggle]").addEventListener("click", async () => {
@@ -1480,11 +1522,12 @@
     list.forEach((a) => {
       const row = document.createElement("div");
       row.className = "service-item";
+      const metaLine = `${a.username || ""} · ${a.resource_type || ""} ${a.resource_id || ""} · ${a.detail || ""}`;
       row.innerHTML = `
-        <div class="service-main">
-          <div class="service-name">${a.action}</div>
-          <div class="service-meta muted">${a.username} · ${a.resource_type} ${a.resource_id || ""} · ${a.detail || ""}</div>
-          <div class="service-meta muted mono">${a.created_at || ""}</div>
+        <div class="info">
+          <strong title="${escapeHtml(a.action || "")}">${escapeHtml(a.action || "")}</strong>
+          <span class="meta" title="${escapeHtml(metaLine)}">${escapeHtml(metaLine)}</span>
+          <span class="meta" title="${escapeHtml(a.created_at || "")}">${escapeHtml(a.created_at || "")}</span>
         </div>`;
       els.auditList.appendChild(row);
     });

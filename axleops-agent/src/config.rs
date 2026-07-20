@@ -15,6 +15,15 @@ pub struct Config {
     pub watchdog_enabled: bool,
     /// Watchdog interval in seconds
     pub watchdog_interval_secs: u64,
+    /// After start, keep probing health_url for this many seconds before giving up.
+    pub health_start_grace_secs: u64,
+    /// Seconds between start-time health probes.
+    pub health_start_interval_secs: u64,
+    /// Reuse last probe result for list/status for this many seconds.
+    pub health_probe_cache_secs: u64,
+    /// If true, stop the process when start-time health still fails after grace.
+    /// If false (default), leave process running as Unhealthy (better for slow JARs).
+    pub health_kill_on_start_fail: bool,
 }
 
 impl Default for Config {
@@ -25,6 +34,10 @@ impl Default for Config {
             data_dir: PathBuf::from("./data"),
             watchdog_enabled: true,
             watchdog_interval_secs: 15,
+            health_start_grace_secs: 30,
+            health_start_interval_secs: 2,
+            health_probe_cache_secs: 8,
+            health_kill_on_start_fail: false,
         }
     }
 }
@@ -56,6 +69,27 @@ impl Config {
             if let Ok(n) = v.parse() {
                 cfg.watchdog_interval_secs = n;
             }
+        }
+        if let Ok(v) = std::env::var("AXLEOPS_HEALTH_START_GRACE_SECS") {
+            if let Ok(n) = v.parse() {
+                cfg.health_start_grace_secs = n;
+            }
+        }
+        if let Ok(v) = std::env::var("AXLEOPS_HEALTH_START_INTERVAL_SECS") {
+            if let Ok(n) = v.parse() {
+                cfg.health_start_interval_secs = n;
+            }
+        }
+        if let Ok(v) = std::env::var("AXLEOPS_HEALTH_PROBE_CACHE_SECS") {
+            if let Ok(n) = v.parse() {
+                cfg.health_probe_cache_secs = n;
+            }
+        }
+        if let Ok(v) = std::env::var("AXLEOPS_HEALTH_KILL_ON_START_FAIL") {
+            cfg.health_kill_on_start_fail = matches!(
+                v.to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            );
         }
 
         fs::create_dir_all(&cfg.data_dir)?;

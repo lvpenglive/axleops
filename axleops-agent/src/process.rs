@@ -1,3 +1,4 @@
+use crate::config::Config;
 use crate::models::{ServiceKind, ServiceSpec, ServiceState, ServiceStatus};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -7,6 +8,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use sysinfo::{Pid, ProcessesToUpdate, System};
 use thiserror::Error;
 
@@ -58,15 +60,43 @@ pub struct ProcessManager {
     /// Live OS handles for processes we spawned in this agent lifetime.
     /// Prefer `Child::kill()` over PID-only taskkill/kill — especially on Windows.
     children: Mutex<HashMap<String, Child>>,
+    health_start_grace: Duration,
+    health_start_interval: Duration,
+    health_cache_ttl: Duration,
+    health_kill_on_start_fail: bool,
+    /// Cached health_url probe results (name -> snapshot).
+    health_cache: Mutex<HashMap<String, HealthCacheEntry>>,
+}
+
+#[derive(Clone)]
+struct HealthCacheEntry {
+    at: Instant,
+    healthy: bool,
+    message: String,
+}
+
+#[derive(Clone, Copy)]
+enum ProbeMode {
+    /// Hit health_url and refresh cache.
+    Live,
+    /// Use cache if fresh; otherwise leave health unset (no network).
+    CacheOnly,
+    /// Never probe.
+    Skip,
 }
 
 impl ProcessManager {
-    pub fn new(data_dir: PathBuf) -> Self {
-        let _ = fs::create_dir_all(data_dir.join("services"));
+    pub fn new(config: &Config) -> Self {
+        let _ = fs::create_dir_all(config.data_dir.join("services"));
         Self {
-            data_dir,
+            data_dir: config.data_dir.clone(),
             start_lock: Mutex::new(()),
             children: Mutex::new(HashMap::new()),
+            health_start_grace: Duration::from_secs(config.health_start_grace_secs.max(1)),
+            health_start_interval: Duration::from_secs(config.health_start_interval_secs.max(1)),
+            health_cache_ttl: Duration::from_secs(config.health_probe_cache_secs),
+            health_kill_on_start_fail: config.health_kill_on_start_fail,
+            health_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -190,9 +220,13 @@ impl ProcessManager {
             return Err(ProcessError::Other("name is required".into()));
         }
         let _ = spec.resolved_kind().map_err(ProcessError::Other)?;
-        let meta = Self::meta_from_spec(spec)?;
+        let mut meta = Self::meta_from_spec(spec)?;
+        // Preserve watchdog intent — editing a definition must not clear desired_running.
+        if let Ok(Some(prev)) = self.read_meta(&meta.name) {
+            meta.desired_running = prev.desired_running;
+        }
         self.write_meta(&meta)?;
-        Ok(self.status(&meta.name))
+        Ok(self.status_ex(&meta.name, ProbeMode::CacheOnly))
     }
 
     pub fn get_spec(&self, name: &str) -> Result<ServiceSpec, ProcessError> {
@@ -239,6 +273,60 @@ impl ProcessManager {
         let mut sys = System::new();
         sys.refresh_processes(ProcessesToUpdate::Some(&[Pid::from_u32(pid)]), true);
         sys.process(Pid::from_u32(pid)).is_some()
+    }
+
+    /// All descendants of `root` (not including root), via current process table.
+    fn collect_descendant_pids(root: u32) -> Vec<u32> {
+        let mut sys = System::new();
+        sys.refresh_processes(ProcessesToUpdate::All, true);
+        let mut by_parent: HashMap<u32, Vec<u32>> = HashMap::new();
+        for (pid, proc) in sys.processes() {
+            if let Some(parent) = proc.parent() {
+                by_parent
+                    .entry(parent.as_u32())
+                    .or_default()
+                    .push(pid.as_u32());
+            }
+        }
+        let mut out = Vec::new();
+        let mut stack = vec![root];
+        let mut seen = std::collections::HashSet::new();
+        seen.insert(root);
+        while let Some(p) = stack.pop() {
+            let Some(children) = by_parent.get(&p) else {
+                continue;
+            };
+            for &c in children {
+                if seen.insert(c) {
+                    out.push(c);
+                    stack.push(c);
+                }
+            }
+        }
+        out
+    }
+
+    fn collect_tree_pids(root: u32) -> Vec<u32> {
+        let mut pids = Self::collect_descendant_pids(root);
+        pids.push(root);
+        pids.sort_unstable();
+        pids.dedup();
+        pids
+    }
+
+    fn any_pid_alive(pids: &[u32]) -> bool {
+        pids.iter().copied().any(Self::is_pid_alive)
+    }
+
+    fn refresh_tree_pids(root: u32, known: &[u32]) -> Vec<u32> {
+        let mut set: std::collections::BTreeSet<u32> =
+            known.iter().copied().filter(|p| Self::is_pid_alive(*p)).collect();
+        if Self::is_pid_alive(root) {
+            for p in Self::collect_tree_pids(root) {
+                set.insert(p);
+            }
+        }
+        set.into_iter().collect()
     }
 
     fn parse_kind(s: &str) -> Option<ServiceKind> {
@@ -322,7 +410,80 @@ impl ProcessManager {
         status
     }
 
+    fn remember_health(&self, name: &str, status: &ServiceStatus) {
+        let Some(healthy) = status.healthy else {
+            return;
+        };
+        if let Ok(mut cache) = self.health_cache.lock() {
+            cache.insert(
+                name.to_string(),
+                HealthCacheEntry {
+                    at: Instant::now(),
+                    healthy,
+                    message: status
+                        .message
+                        .clone()
+                        .unwrap_or_else(|| {
+                            if healthy {
+                                "healthy".into()
+                            } else {
+                                "unhealthy".into()
+                            }
+                        }),
+                },
+            );
+        }
+    }
+
+    fn apply_cached_health(&self, name: &str, mut status: ServiceStatus) -> ServiceStatus {
+        let Ok(cache) = self.health_cache.lock() else {
+            return status;
+        };
+        let Some(entry) = cache.get(name) else {
+            return status;
+        };
+        if self.health_cache_ttl.is_zero() || entry.at.elapsed() > self.health_cache_ttl {
+            return status;
+        }
+        status.healthy = Some(entry.healthy);
+        status.message = Some(entry.message.clone());
+        if entry.healthy {
+            if matches!(status.state, ServiceState::Unhealthy) {
+                status.state = ServiceState::Running;
+            }
+        } else if matches!(status.state, ServiceState::Running) {
+            status.state = ServiceState::Unhealthy;
+        }
+        status
+    }
+
+    fn with_health(
+        &self,
+        name: &str,
+        status: ServiceStatus,
+        health_url: Option<&str>,
+        mode: ProbeMode,
+    ) -> ServiceStatus {
+        let url = health_url.map(str::trim).filter(|u| !u.is_empty());
+        if url.is_none() || !matches!(status.state, ServiceState::Running | ServiceState::Unhealthy) {
+            return status;
+        }
+        match mode {
+            ProbeMode::Skip => status,
+            ProbeMode::CacheOnly => self.apply_cached_health(name, status),
+            ProbeMode::Live => {
+                let probed = Self::apply_health(status, url);
+                self.remember_health(name, &probed);
+                probed
+            }
+        }
+    }
+
     pub fn status(&self, name: &str) -> ServiceStatus {
+        self.status_ex(name, ProbeMode::Live)
+    }
+
+    fn status_ex(&self, name: &str, mode: ProbeMode) -> ServiceStatus {
         let meta = self.read_meta(name).ok().flatten();
         let health_url = meta
             .as_ref()
@@ -344,11 +505,14 @@ impl ProcessManager {
                     });
                 }
                 let status = Self::status_running(name, &record);
-                Self::apply_health(status, health_url)
+                self.with_health(name, status, health_url, mode)
             }
             Ok(Some(record)) => {
                 let _ = self.take_child(name);
                 let _ = self.clear_record(name);
+                if let Ok(mut cache) = self.health_cache.lock() {
+                    cache.remove(name);
+                }
                 let kind = meta
                     .as_ref()
                     .and_then(|m| Self::parse_kind(&m.kind))
@@ -394,7 +558,7 @@ impl ProcessManager {
 
     /// Restart = stop (if needed) then start from saved spec.
     pub fn restart(&self, name: &str) -> Result<ServiceStatus, ProcessError> {
-        let current = self.status(name);
+        let current = self.status_ex(name, ProbeMode::Skip);
         if current.pid.is_some() {
             self.stop_runtime(name, false)?;
         }
@@ -403,7 +567,7 @@ impl ProcessManager {
 
     /// Remove definition (+ stop if running). Deletes meta and pid; keeps log file.
     pub fn remove(&self, name: &str) -> Result<ServiceStatus, ProcessError> {
-        let current = self.status(name);
+        let current = self.status_ex(name, ProbeMode::Skip);
         if current.pid.is_some() {
             let _ = self.stop(name);
         } else {
@@ -447,7 +611,11 @@ impl ProcessManager {
 
     pub fn list_statuses(&self) -> Result<Vec<ServiceStatus>, ProcessError> {
         let names = self.collect_service_names()?;
-        Ok(names.iter().map(|n| self.status(n)).collect())
+        // Avoid N×health_url on every Admin refresh; use cache or skip.
+        Ok(names
+            .iter()
+            .map(|n| self.status_ex(n, ProbeMode::CacheOnly))
+            .collect())
     }
 
     pub fn start(&self, spec: &ServiceSpec) -> Result<ServiceStatus, ProcessError> {
@@ -456,7 +624,7 @@ impl ProcessManager {
             .lock()
             .map_err(|_| ProcessError::Other("start lock poisoned".into()))?;
 
-        let current = self.status(&spec.name);
+        let current = self.status_ex(&spec.name, ProbeMode::Skip);
         if current.pid.is_some()
             && matches!(
                 current.state,
@@ -581,28 +749,60 @@ impl ProcessManager {
         };
 
         if let Some(url) = spec.health_url.as_deref().map(str::trim).filter(|u| !u.is_empty()) {
-            // Give process a brief moment before first probe.
-            std::thread::sleep(std::time::Duration::from_secs(2));
-            status = Self::apply_health(status, Some(url));
-            // Initial probe failure = start failed: tear down so the JVM is not left orphaned.
-            if matches!(status.state, ServiceState::Unhealthy) {
-                let detail = status
-                    .message
-                    .clone()
-                    .unwrap_or_else(|| "health check failed".into());
-                if let Err(e) = self.stop_runtime(&spec.name, true) {
-                    tracing::warn!(
-                        service = %spec.name,
-                        error = %e,
-                        "cleanup after failed health probe also failed"
-                    );
+            // Retry within grace window — slow Spring JARs often need >2s.
+            let deadline = Instant::now() + self.health_start_grace;
+            loop {
+                if self.reap_child_if_exited(&spec.name) || !Self::is_pid_alive(pid) {
+                    let _ = self.take_child(&spec.name);
+                    let _ = self.clear_record(&spec.name);
+                    if let Ok(Some(mut meta)) = self.read_meta(&spec.name) {
+                        meta.desired_running = false;
+                        let _ = self.write_meta(&meta);
+                    }
                     return Err(ProcessError::Other(format!(
-                        "start failed ({detail}); process cleanup failed: {e}"
+                        "process exited during health wait (pid={pid}); check service logs"
                     )));
                 }
-                return Err(ProcessError::Other(format!(
-                    "start failed ({detail}); process stopped"
-                )));
+
+                match probe_health_url(url) {
+                    Ok(()) => {
+                        status.healthy = Some(true);
+                        status.state = ServiceState::Running;
+                        status.message = Some("healthy".into());
+                        self.remember_health(&spec.name, &status);
+                        break;
+                    }
+                    Err(err) => {
+                        if Instant::now() >= deadline {
+                            status.state = ServiceState::Unhealthy;
+                            status.healthy = Some(false);
+                            status.message = Some(format!("unhealthy: {err}"));
+                            self.remember_health(&spec.name, &status);
+                            if self.health_kill_on_start_fail {
+                                let msg = status
+                                    .message
+                                    .clone()
+                                    .unwrap_or_else(|| "health check failed".into());
+                                if let Err(e) = self.stop_runtime(&spec.name, true) {
+                                    tracing::warn!(
+                                        service = %spec.name,
+                                        error = %e,
+                                        "cleanup after failed health probe also failed"
+                                    );
+                                    return Err(ProcessError::Other(format!(
+                                        "start failed ({msg}); process cleanup failed: {e}"
+                                    )));
+                                }
+                                return Err(ProcessError::Other(format!(
+                                    "start failed ({msg}); process stopped"
+                                )));
+                            }
+                            // Keep process; Admin can stop explicitly. Avoid false kills on slow boot.
+                            break;
+                        }
+                        std::thread::sleep(self.health_start_interval);
+                    }
+                }
             }
         }
 
@@ -714,68 +914,103 @@ impl ProcessManager {
         let alive = match child.as_mut().and_then(|c| c.try_wait().ok()) {
             Some(Some(_)) => false, // already exited
             Some(None) => true,
-            None => Self::is_pid_alive(record.pid),
+            None => Self::is_pid_alive(record.pid) || !Self::collect_descendant_pids(record.pid).is_empty(),
         };
 
         if !alive {
             let _ = self.clear_record(name);
+            if let Ok(mut cache) = self.health_cache.lock() {
+                cache.remove(name);
+            }
             if let Some(mut c) = child {
                 let _ = c.wait();
             }
             return Err(ProcessError::NotRunning);
         }
 
-        // Soft stop is best-effort; many Windows console/Java processes ignore it.
-        let _ = terminate_pid(record.pid);
+        // Snapshot the tree before signalling — children may outlive the root pid.
+        let mut tree = Self::collect_tree_pids(record.pid);
 
-        for _ in 0..30 {
-            let gone = match child.as_mut().and_then(|c| c.try_wait().ok()) {
+        // Soft stop: process group + every known descendant.
+        let _ = terminate_tree(record.pid, &tree);
+
+        for _ in 0..40 {
+            tree = Self::refresh_tree_pids(record.pid, &tree);
+            let child_gone = match child.as_mut().and_then(|c| c.try_wait().ok()) {
                 Some(Some(_)) => true,
                 Some(None) => false,
-                None => !Self::is_pid_alive(record.pid),
+                None => true,
             };
-            if gone {
+            if child_gone && !Self::any_pid_alive(&tree) {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
 
+        tree = Self::refresh_tree_pids(record.pid, &tree);
         let still_alive = match child.as_mut().and_then(|c| c.try_wait().ok()) {
-            Some(Some(_)) => false,
+            Some(Some(_)) => Self::any_pid_alive(&tree),
             Some(None) => true,
-            None => Self::is_pid_alive(record.pid),
+            None => Self::any_pid_alive(&tree),
         };
 
         if still_alive {
-            // Owned handle → TerminateProcess (Windows) / kill (Unix); most reliable path.
+            // Owned handle → TerminateProcess (Windows) / SIGKILL (Unix).
             if let Some(ref mut c) = child {
                 let _ = c.kill();
             }
-            // Also kill the process tree by PID (children of java, etc.).
-            let _ = force_kill_pid(record.pid);
-            for _ in 0..20 {
-                let gone = match child.as_mut().and_then(|c| c.try_wait().ok()) {
+            // Force-kill whole tree (group + each descendant + root).
+            let _ = force_kill_tree(record.pid, &tree);
+
+            for _ in 0..30 {
+                tree = Self::refresh_tree_pids(record.pid, &tree);
+                let child_gone = match child.as_mut().and_then(|c| c.try_wait().ok()) {
                     Some(Some(_)) => true,
                     Some(None) => false,
-                    None => !Self::is_pid_alive(record.pid),
+                    None => true,
                 };
-                if gone {
+                if child_gone && !Self::any_pid_alive(&tree) {
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
+
+            // Second force pass for stubborn grandchildren spawned during the first kill.
+            tree = Self::refresh_tree_pids(record.pid, &tree);
+            if Self::any_pid_alive(&tree)
+                || matches!(child.as_mut().and_then(|c| c.try_wait().ok()), Some(None))
+            {
+                if let Some(ref mut c) = child {
+                    let _ = c.kill();
+                }
+                let _ = force_kill_tree(record.pid, &tree);
+                for _ in 0..20 {
+                    tree = Self::refresh_tree_pids(record.pid, &tree);
+                    let child_gone = match child.as_mut().and_then(|c| c.try_wait().ok()) {
+                        Some(Some(_)) => true,
+                        Some(None) => false,
+                        None => true,
+                    };
+                    if child_gone && !Self::any_pid_alive(&tree) {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+            }
+
+            tree = Self::refresh_tree_pids(record.pid, &tree);
             let still = match child.as_mut().and_then(|c| c.try_wait().ok()) {
-                Some(Some(_)) => false,
+                Some(Some(_)) => Self::any_pid_alive(&tree),
                 Some(None) => true,
-                None => Self::is_pid_alive(record.pid),
+                None => Self::any_pid_alive(&tree),
             };
             if still {
-                // Put handle back so a later stop can retry.
                 if let Some(c) = child {
                     self.store_child(name, c);
                 }
+                let leftover: Vec<u32> = tree.into_iter().filter(|p| Self::is_pid_alive(*p)).collect();
                 return Err(ProcessError::Other(format!(
-                    "process still alive after force kill (pid={})",
+                    "process tree still alive after force kill (root={}, leftover={leftover:?})",
                     record.pid
                 )));
             }
@@ -796,6 +1031,9 @@ impl ProcessManager {
             });
         }
         self.clear_record(name)?;
+        if let Ok(mut cache) = self.health_cache.lock() {
+            cache.remove(name);
+        }
 
         if clear_desired {
             if let Ok(Some(mut meta)) = self.read_meta(name) {
@@ -858,14 +1096,9 @@ impl ProcessManager {
             if !meta.desired_running {
                 continue;
             }
-            let st = self.status(&name);
+            let st = self.status_ex(&name, ProbeMode::Skip);
             let need_restart = match st.state {
-                ServiceState::Running => false,
-                // Process still up — avoid flapping restarts on stuck health probes.
-                ServiceState::Unhealthy => {
-                    tracing::debug!(service = %name, "desired service unhealthy; not restarting");
-                    false
-                }
+                ServiceState::Running | ServiceState::Unhealthy => false,
                 ServiceState::Stopped | ServiceState::Unknown => true,
             };
             if !need_restart {
@@ -1058,45 +1291,92 @@ fn run_taskkill(args: &[&str], pid: u32) -> Result<(), ProcessError> {
     )))
 }
 
-fn terminate_pid(pid: u32) -> Result<(), ProcessError> {
+fn terminate_tree(root: u32, tree: &[u32]) -> Result<(), ProcessError> {
     #[cfg(windows)]
     {
-        let pid_s = pid.to_string();
+        let root_s = root.to_string();
         // Soft terminate process tree; failure is OK — caller may force-kill.
-        let _ = run_taskkill(&["/PID", &pid_s, "/T"], pid);
+        let _ = run_taskkill(&["/PID", &root_s, "/T"], root);
+        for &pid in tree.iter().rev() {
+            if pid == root {
+                continue;
+            }
+            let pid_s = pid.to_string();
+            let _ = run_taskkill(&["/PID", &pid_s], pid);
+        }
         Ok(())
     }
     #[cfg(unix)]
     {
-        // Soft signal whole process group (setsid → PGID == pid). Best-effort.
-        unix_kill_group(pid, libc::SIGTERM);
+        // Soft signal process group first (setsid → PGID == root).
+        unix_kill_group(root, libc::SIGTERM);
+        // Then every known descendant (covers processes that left the group).
+        for &pid in tree.iter().rev() {
+            unix_kill_one(pid, libc::SIGTERM);
+        }
         Ok(())
     }
 }
 
-fn force_kill_pid(pid: u32) -> Result<(), ProcessError> {
+fn force_kill_tree(root: u32, tree: &[u32]) -> Result<(), ProcessError> {
     #[cfg(windows)]
     {
-        let pid_s = pid.to_string();
-        run_taskkill(&["/F", "/T", "/PID", &pid_s], pid)
+        let root_s = root.to_string();
+        let mut last_err = None;
+        // /T kills the Windows process tree rooted at root.
+        if let Err(e) = run_taskkill(&["/F", "/T", "/PID", &root_s], root) {
+            last_err = Some(e);
+        }
+        for &pid in tree.iter().rev() {
+            if !ProcessManager::is_pid_alive(pid) {
+                continue;
+            }
+            let pid_s = pid.to_string();
+            if let Err(e) = run_taskkill(&["/F", "/T", "/PID", &pid_s], pid) {
+                last_err = Some(e);
+            }
+        }
+        if ProcessManager::any_pid_alive(tree) || ProcessManager::is_pid_alive(root) {
+            if let Some(e) = last_err {
+                return Err(e);
+            }
+            return Err(ProcessError::Other(format!(
+                "taskkill left processes alive for root {root}"
+            )));
+        }
+        Ok(())
     }
     #[cfg(unix)]
     {
-        // SIGKILL process group first, then the root pid as fallback.
-        if unix_kill_group(pid, libc::SIGKILL) {
-            return Ok(());
+        // SIGKILL process group, then every descendant (deepest first), then root.
+        unix_kill_group(root, libc::SIGKILL);
+        for &pid in tree.iter().rev() {
+            unix_kill_one(pid, libc::SIGKILL);
         }
-        if unix_kill_one(pid, libc::SIGKILL) {
-            return Ok(());
+        unix_kill_one(root, libc::SIGKILL);
+
+        // One more pass for anything still listed as alive.
+        let leftovers: Vec<u32> = tree
+            .iter()
+            .copied()
+            .chain(std::iter::once(root))
+            .filter(|p| ProcessManager::is_pid_alive(*p))
+            .collect();
+        for pid in leftovers.iter().rev() {
+            unix_kill_group(*pid, libc::SIGKILL);
+            unix_kill_one(*pid, libc::SIGKILL);
         }
-        // ESRCH = already gone
-        let err = std::io::Error::last_os_error();
-        if err.raw_os_error() == Some(libc::ESRCH) {
-            return Ok(());
+
+        if ProcessManager::any_pid_alive(&leftovers) || ProcessManager::is_pid_alive(root) {
+            let still: Vec<u32> = leftovers
+                .into_iter()
+                .filter(|p| ProcessManager::is_pid_alive(*p))
+                .collect();
+            return Err(ProcessError::Other(format!(
+                "kill -9 left processes alive for root {root}: {still:?}"
+            )));
         }
-        Err(ProcessError::Other(format!(
-            "kill -9 failed for pid {pid}: {err}"
-        )))
+        Ok(())
     }
 }
 

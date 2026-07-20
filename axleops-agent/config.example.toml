@@ -2,6 +2,8 @@
 # Or override with env:
 #   AXLEOPS_BIND / AXLEOPS_TOKEN / AXLEOPS_DATA_DIR
 #   AXLEOPS_WATCHDOG_ENABLED / AXLEOPS_WATCHDOG_INTERVAL_SECS
+#   AXLEOPS_HEALTH_START_GRACE_SECS / AXLEOPS_HEALTH_START_INTERVAL_SECS
+#   AXLEOPS_HEALTH_PROBE_CACHE_SECS / AXLEOPS_HEALTH_KILL_ON_START_FAIL
 #
 # Clients must send header: X-AxleOps-Token: <token>
 # Runtime under data_dir: services/ pids/ logs/
@@ -12,3 +14,11 @@ token = "change-me-to-a-long-secret"
 data_dir = "./data"
 watchdog_enabled = true
 watchdog_interval_secs = 15
+
+# 启动后在宽限期内反复探活（适合慢启动 Spring JAR）；宽限结束仍失败则标 Unhealthy。
+health_start_grace_secs = 30
+health_start_interval_secs = 2
+# 列表接口复用探活结果，避免每次刷新都打满 health_url。
+health_probe_cache_secs = 8
+# true = 启动探活最终失败时强杀进程；false = 保留进程为 Unhealthy（默认）。
+health_kill_on_start_fail = false

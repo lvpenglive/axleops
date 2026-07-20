@@ -32,7 +32,7 @@ async fn main() -> anyhow::Result<()> {
         "starting axleops-agent"
     );
 
-    let processes = Arc::new(ProcessManager::new(config.data_dir.clone()));
+    let processes = Arc::new(ProcessManager::new(&config));
     processes.recover_desired();
 
     if config.watchdog_enabled {

@@ -7,7 +7,18 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/app.css?v=20260715v03" />
+  <link rel="stylesheet" href="/app.css?v=20260720layout" />
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("axleops_theme") || "dark";
+        if (t !== "dark" && t !== "light" && t !== "contrast") t = "dark";
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {
+        document.documentElement.setAttribute("data-theme", "dark");
+      }
+    })();
+  </script>
 </head>
 <body>
   <div class="bg-grid" aria-hidden="true"></div>
@@ -28,6 +39,9 @@
       </aside>
 
       <div class="login-panel">
+        <div class="login-theme-slot">
+          <button type="button" class="btn ghost small theme-toggle" data-theme-toggle title="切换主题">深色</button>
+        </div>
         <div class="login-panel-top">
           <span class="login-mark" aria-hidden="true">A</span>
           <div>
@@ -64,6 +78,7 @@
         <span class="badge">Admin</span>
       </div>
       <div class="topbar-actions">
+        <button type="button" class="btn ghost small theme-toggle" data-theme-toggle title="切换主题">深色</button>
         <span id="current-user" class="topbar-user muted" hidden></span>
         <button type="button" id="btn-password" class="btn ghost" hidden>改密</button>
         <button type="button" id="btn-refresh" class="btn ghost">刷新</button>
@@ -183,8 +198,10 @@
             <div class="hero-text">
               <p class="kicker">Proxy</p>
               <h2 id="proxy-detail-name">—</h2>
-              <p id="proxy-detail-url" class="mono muted"></p>
-              <p id="proxy-detail-online" class="hero-online unknown">未探测</p>
+              <div class="hero-meta">
+                <p id="proxy-detail-url" class="mono muted"></p>
+                <p id="proxy-detail-online" class="hero-online unknown">未探测</p>
+              </div>
               <p id="proxy-detail-notes" class="muted"></p>
             </div>
             <div class="hero-actions">
@@ -239,8 +256,10 @@
             <div class="hero-text">
               <p class="kicker">Machine</p>
               <h2 id="detail-name">—</h2>
-              <p id="detail-url" class="mono muted"></p>
-              <p id="detail-online" class="hero-online unknown">未探测</p>
+              <div class="hero-meta">
+                <p id="detail-url" class="mono muted"></p>
+                <p id="detail-online" class="hero-online unknown">未探测</p>
+              </div>
               <p id="detail-via" class="muted" hidden></p>
             </div>
             <div class="hero-actions">
@@ -427,6 +446,6 @@
     <div id="toast" class="toast" hidden></div>
   </div>
 
-  <script src="/app.js?v=20260715v03"></script>
+  <script src="/app.js?v=20260720layout"></script>
 </body>
 </html>
