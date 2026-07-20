@@ -139,6 +139,23 @@
     btnBatchStart: document.getElementById("btn-batch-start"),
     btnBatchStop: document.getElementById("btn-batch-stop"),
     btnBatchRestart: document.getElementById("btn-batch-restart"),
+    artifactService: document.getElementById("artifact-service"),
+    artifactServiceLabel: document.getElementById("artifact-service-label"),
+    artifactServiceName: document.getElementById("artifact-service-name"),
+    artifactVersion: document.getElementById("artifact-version"),
+    artifactNote: document.getElementById("artifact-note"),
+    artifactFile: document.getElementById("artifact-file"),
+    artifactFileLabel: document.getElementById("artifact-file-label"),
+    artifactFileHint: document.getElementById("artifact-file-hint"),
+    artifactDrop: document.getElementById("artifact-drop"),
+    artifactIdle: document.getElementById("artifact-idle"),
+    artifactBody: document.getElementById("artifact-body"),
+    artifactList: document.getElementById("artifact-list"),
+    artifactEmpty: document.getElementById("artifact-empty"),
+    artifactError: document.getElementById("artifact-error"),
+    btnUploadArtifact: document.getElementById("btn-upload-artifact"),
+    btnReloadArtifacts: document.getElementById("btn-reload-artifacts"),
+    btnRollbackService: document.getElementById("btn-rollback-service"),
     formStart: document.getElementById("form-start"),
     formTitle: document.getElementById("form-title"),
     fieldName: document.getElementById("field-name"),
@@ -147,6 +164,8 @@
     btnSaveService: document.getElementById("btn-save-service"),
     btnStartService: document.getElementById("btn-start-service"),
     btnResetForm: document.getElementById("btn-reset-form"),
+    btnToggleAdvanced: document.getElementById("btn-toggle-advanced"),
+    formAdvancedBody: document.getElementById("form-advanced-body"),
     logBytes: document.getElementById("log-bytes"),
     logAuto: document.getElementById("log-auto"),
     logInterval: document.getElementById("log-interval"),
@@ -169,6 +188,7 @@
     selectedProxyId: null,
     editingUpstreamId: null,
     logService: null,
+    focusService: null,
     editingName: null,
     online: { agents: {}, proxies: {} },
     onlineTimer: null,
@@ -232,6 +252,28 @@
       { "X-AxleOps-Session": getToken() }
     );
     const res = await fetch(path, { ...options, headers });
+    let body = null;
+    const text = await res.text();
+    if (text) {
+      try {
+        body = JSON.parse(text);
+      } catch {
+        body = { ok: false, message: text };
+      }
+    }
+    if (res.status === 401) {
+      throw new Error(friendlyError("会话无效或未授权"));
+    }
+    if (!res.ok) {
+      const msg = (body && body.message) || `HTTP ${res.status}`;
+      throw new Error(friendlyError(msg));
+    }
+    return body;
+  }
+
+  async function apiUpload(path, formData) {
+    const headers = { "X-AxleOps-Session": getToken() };
+    const res = await fetch(path, { method: "POST", headers, body: formData });
     let body = null;
     const text = await res.text();
     if (text) {
@@ -569,6 +611,69 @@
     });
   }
 
+  const ADVANCED_KEY = "axleops_form_advanced_open";
+
+  function setAdvancedOpen(open, persist) {
+    const on = !!open;
+    if (els.formAdvancedBody) els.formAdvancedBody.hidden = !on;
+    if (els.btnToggleAdvanced) {
+      els.btnToggleAdvanced.setAttribute("aria-expanded", on ? "true" : "false");
+      els.btnToggleAdvanced.classList.toggle("is-open", on);
+    }
+    if (persist !== false) {
+      try {
+        localStorage.setItem(ADVANCED_KEY, on ? "1" : "0");
+      } catch (_) {}
+    }
+  }
+
+  function initAdvancedToggle() {
+    let open = false;
+    try {
+      open = localStorage.getItem(ADVANCED_KEY) === "1";
+    } catch (_) {}
+    setAdvancedOpen(open, false);
+    if (els.btnToggleAdvanced) {
+      els.btnToggleAdvanced.addEventListener("click", () => {
+        const next = els.btnToggleAdvanced.getAttribute("aria-expanded") !== "true";
+        setAdvancedOpen(next);
+      });
+    }
+  }
+
+  function specHasAdvanced(spec) {
+    if (!spec) return false;
+    if ((spec.jvm_args && spec.jvm_args.length) || (spec.app_args && spec.app_args.length)) return true;
+    if ((spec.args && spec.args.length) || (spec.interpreter && String(spec.interpreter).trim())) return true;
+    if (spec.work_dir && String(spec.work_dir).trim()) return true;
+    if (spec.health_url && String(spec.health_url).trim()) return true;
+    if (spec.env && typeof spec.env === "object" && Object.keys(spec.env).length) return true;
+    return false;
+  }
+
+  function highlightFocusService(name) {
+    if (!els.serviceList) return;
+    els.serviceList.querySelectorAll(".service-item").forEach((el) => {
+      el.classList.toggle("focus-service", !!name && el.dataset.name === name);
+    });
+  }
+
+  function setFocusService(name, opts) {
+    const options = opts || {};
+    const n = (name || "").trim();
+    state.focusService = n || null;
+    if (els.artifactService) els.artifactService.value = n;
+    setArtifactServiceLabel(n || "—");
+    syncArtifactPanel(!!n);
+    highlightFocusService(n);
+    if (n && options.loadArtifacts !== false) {
+      loadArtifacts();
+    }
+    if (n && options.expandRelease) {
+      expandSection("release");
+    }
+  }
+
   function proxyNameOf(proxyId) {
     const p = state.proxies.find((x) => x.id === proxyId);
     return p ? p.name : null;
@@ -843,12 +948,22 @@
     }
     els.pingResult.hidden = true;
     state.logService = null;
+    state.focusService = null;
     stopLogPoll();
     if (els.logAuto) els.logAuto.checked = false;
     els.logContent.textContent = "";
     els.logTarget.textContent = "选择服务后查看日志";
     els.btnFetchLogs.disabled = true;
     resetServiceForm();
+    if (els.artifactService) els.artifactService.value = "";
+    setArtifactServiceLabel("—");
+    if (els.artifactList) els.artifactList.innerHTML = "";
+    if (els.artifactFile) els.artifactFile.value = "";
+    if (els.artifactVersion) els.artifactVersion.value = "";
+    if (els.artifactNote) els.artifactNote.value = "";
+    syncArtifactPanel(false);
+    syncArtifactFileLabel();
+    highlightFocusService(null);
     await loadServices();
   }
 
@@ -1188,6 +1303,310 @@
     await loadUpstreams();
   }
 
+  const COLLAPSE_KEY = "axleops_collapse_v1";
+
+  function readCollapseState() {
+    try {
+      return JSON.parse(localStorage.getItem(COLLAPSE_KEY) || "{}") || {};
+    } catch (_) {
+      return {};
+    }
+  }
+
+  function writeCollapseState(map) {
+    try {
+      localStorage.setItem(COLLAPSE_KEY, JSON.stringify(map));
+    } catch (_) {}
+  }
+
+  function setSectionCollapsed(section, collapsed, persist) {
+    if (!section) return;
+    section.classList.toggle("is-collapsed", !!collapsed);
+    const btn = section.querySelector("[data-collapse-toggle]");
+    if (btn) btn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    if (persist !== false) {
+      const key = section.getAttribute("data-collapse");
+      if (!key) return;
+      const map = readCollapseState();
+      map[key] = !!collapsed;
+      writeCollapseState(map);
+    }
+  }
+
+  function expandSection(key) {
+    const section = document.querySelector(`.collapsible[data-collapse="${key}"]`);
+    if (section) {
+      setSectionCollapsed(section, false);
+      section.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      if (key === "release" && state.focusService) {
+        loadArtifacts();
+      }
+    }
+  }
+
+  function initCollapsibles() {
+    const saved = readCollapseState();
+    document.querySelectorAll(".collapsible[data-collapse]").forEach((section) => {
+      const key = section.getAttribute("data-collapse");
+      const collapsed =
+        saved[key] !== undefined ? !!saved[key] : section.classList.contains("is-collapsed");
+      setSectionCollapsed(section, collapsed, false);
+      const toggle = section.querySelector("[data-collapse-toggle]");
+      if (toggle) {
+        toggle.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          setSectionCollapsed(section, !section.classList.contains("is-collapsed"));
+        });
+      }
+      const head = section.querySelector(".surface-head");
+      if (head) {
+        head.addEventListener("dblclick", (ev) => {
+          if (ev.target.closest("button, a, input, select, label")) return;
+          setSectionCollapsed(section, !section.classList.contains("is-collapsed"));
+        });
+      }
+    });
+  }
+
+  function syncArtifactPanel(hasService) {
+    const on = !!hasService;
+    if (els.artifactIdle) els.artifactIdle.hidden = on;
+    if (els.artifactBody) els.artifactBody.hidden = !on;
+    if (els.btnReloadArtifacts) els.btnReloadArtifacts.disabled = !on;
+    if (els.btnRollbackService) els.btnRollbackService.disabled = !on;
+  }
+
+  function setArtifactServiceLabel(name) {
+    const text = name || "—";
+    if (els.artifactServiceLabel) els.artifactServiceLabel.textContent = text;
+    if (els.artifactServiceName) els.artifactServiceName.textContent = text;
+  }
+
+  function focusArtifacts(name) {
+    setFocusService(name, { loadArtifacts: true, expandRelease: true });
+  }
+
+  function syncArtifactFileLabel() {
+    const file = els.artifactFile && els.artifactFile.files && els.artifactFile.files[0];
+    if (els.artifactDrop) els.artifactDrop.classList.toggle("has-file", !!file);
+    if (els.artifactFileLabel) {
+      els.artifactFileLabel.textContent = file
+        ? file.name
+        : "拖拽文件到此处，或点击选择";
+    }
+    if (els.artifactFileHint) {
+      els.artifactFileHint.textContent = file
+        ? `${formatBytes(file.size)} · 可继续改版本号 / 备注后上传`
+        : "支持 JAR / 脚本，最大约 512MB";
+    }
+  }
+
+  function formatBytes(n) {
+    const x = Number(n) || 0;
+    if (x < 1024) return `${x} B`;
+    if (x < 1024 * 1024) return `${(x / 1024).toFixed(1)} KB`;
+    return `${(x / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  function formatTime(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return String(iso);
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  async function loadArtifacts() {
+    if (!els.artifactList || !state.selectedId) return;
+    const name = (els.artifactService && els.artifactService.value.trim()) || "";
+    if (!name) {
+      els.artifactList.innerHTML = "";
+      syncArtifactPanel(false);
+      if (els.artifactEmpty) els.artifactEmpty.hidden = false;
+      return;
+    }
+    setArtifactServiceLabel(name);
+    syncArtifactPanel(true);
+    els.artifactList.innerHTML = "";
+    try {
+      const res = await api(`/api/v1/agents/${state.selectedId}/services/${encodeURIComponent(name)}/artifacts`);
+      const data = unwrapAgentData(res) || {};
+      const list = Array.isArray(data.artifacts) ? data.artifacts : [];
+      if (els.artifactEmpty) els.artifactEmpty.hidden = list.length > 0;
+      list.forEach((art, i) => {
+        const el = document.createElement("div");
+        el.className = "artifact-item" + (art.active ? " active" : "");
+        el.style.animationDelay = `${i * 30}ms`;
+        const meta = [
+          art.filename || "",
+          formatBytes(art.size),
+          art.note || "",
+          formatTime(art.uploaded_at),
+        ]
+          .filter(Boolean)
+          .join(" · ");
+        el.innerHTML = `
+          <div class="info">
+            <strong title="${escapeHtml(art.id || "")}">
+              <span class="state-pill ${art.active ? "running" : "stopped"}">${art.active ? "当前" : "存档"}</span>
+              ${escapeHtml(art.id || "")}
+            </strong>
+            <span class="meta" title="${escapeHtml(meta)}">${escapeHtml(meta)}</span>
+          </div>
+          <div class="row-actions">
+            ${
+              art.active
+                ? `<button type="button" class="btn small" disabled>已生效</button>`
+                : `<button type="button" class="btn small primary" data-act="publish">发布</button>
+                   <button type="button" class="btn small ghost" data-act="activate">仅换包</button>
+                   <button type="button" class="btn small danger" data-act="delete">删除</button>`
+            }
+          </div>`;
+        const pub = el.querySelector('[data-act="publish"]');
+        if (pub) {
+          pub.addEventListener("click", async (ev) => {
+            if (!confirm(`发布 ${art.id}？\n将停止服务、切换制品并启动。`)) return;
+            setBusy(ev.currentTarget, true, "…");
+            try {
+              await api(
+                `/api/v1/agents/${state.selectedId}/services/${encodeURIComponent(name)}/publish`,
+                {
+                  method: "POST",
+                  body: JSON.stringify({ version: art.id, start: true }),
+                }
+              );
+              showToast(`已发布 ${art.id}`);
+              await loadArtifacts();
+              await loadServices();
+            } catch (e) {
+              showToast(e.message, true);
+            } finally {
+              setBusy(ev.currentTarget, false);
+            }
+          });
+        }
+        const act = el.querySelector('[data-act="activate"]');
+        if (act) {
+          act.addEventListener("click", async (ev) => {
+            setBusy(ev.currentTarget, true, "…");
+            try {
+              await api(
+                `/api/v1/agents/${state.selectedId}/services/${encodeURIComponent(name)}/artifacts/${encodeURIComponent(art.id)}/activate`,
+                { method: "POST" }
+              );
+              showToast(`已切换到 ${art.id}（未重启）`);
+              await loadArtifacts();
+              await loadServices();
+            } catch (e) {
+              showToast(e.message, true);
+            } finally {
+              setBusy(ev.currentTarget, false);
+            }
+          });
+        }
+        const del = el.querySelector('[data-act="delete"]');
+        if (del) {
+          del.addEventListener("click", async (ev) => {
+            if (!confirm(`删除制品 ${art.id}？`)) return;
+            setBusy(ev.currentTarget, true, "…");
+            try {
+              await api(
+                `/api/v1/agents/${state.selectedId}/services/${encodeURIComponent(name)}/artifacts/${encodeURIComponent(art.id)}`,
+                { method: "DELETE" }
+              );
+              showToast(`已删除 ${art.id}`);
+              await loadArtifacts();
+            } catch (e) {
+              showToast(e.message, true);
+            } finally {
+              setBusy(ev.currentTarget, false);
+            }
+          });
+        }
+        els.artifactList.appendChild(el);
+      });
+    } catch (e) {
+      if (els.artifactEmpty) els.artifactEmpty.hidden = false;
+      showToast(e.message, true);
+    }
+  }
+
+  async function uploadArtifact() {
+    if (!state.selectedId) return;
+    const name = (els.artifactService && els.artifactService.value.trim()) || "";
+    const file = els.artifactFile && els.artifactFile.files && els.artifactFile.files[0];
+    if (els.artifactError) {
+      els.artifactError.hidden = true;
+      els.artifactError.textContent = "";
+    }
+    if (!name) {
+      if (els.artifactError) {
+        els.artifactError.textContent = "请先在服务列表点「制品」选择服务";
+        els.artifactError.hidden = false;
+      }
+      return;
+    }
+    if (!file) {
+      if (els.artifactError) {
+        els.artifactError.textContent = "请选择文件";
+        els.artifactError.hidden = false;
+      }
+      return;
+    }
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    const ver = els.artifactVersion && els.artifactVersion.value.trim();
+    if (ver) fd.append("version", ver);
+    const note = els.artifactNote && els.artifactNote.value.trim();
+    if (note) fd.append("note", note);
+    setBusy(els.btnUploadArtifact, true, "上传中…");
+    try {
+      await apiUpload(
+        `/api/v1/agents/${state.selectedId}/services/${encodeURIComponent(name)}/artifacts`,
+        fd
+      );
+      showToast("上传成功");
+      if (els.artifactFile) els.artifactFile.value = "";
+      if (els.artifactVersion) els.artifactVersion.value = "";
+      if (els.artifactNote) els.artifactNote.value = "";
+      syncArtifactFileLabel();
+      await loadArtifacts();
+    } catch (e) {
+      if (els.artifactError) {
+        els.artifactError.textContent = e.message;
+        els.artifactError.hidden = false;
+      }
+      showToast(e.message, true);
+    } finally {
+      setBusy(els.btnUploadArtifact, false);
+    }
+  }
+
+  async function rollbackServiceArtifact() {
+    if (!state.selectedId) return;
+    const name = (els.artifactService && els.artifactService.value.trim()) || "";
+    if (!name) return;
+    if (!confirm(`回滚 ${name} 到上一制品并启动？`)) return;
+    setBusy(els.btnRollbackService, true, "…");
+    try {
+      await api(
+        `/api/v1/agents/${state.selectedId}/services/${encodeURIComponent(name)}/rollback`,
+        {
+          method: "POST",
+          body: JSON.stringify({ start: true }),
+        }
+      );
+      showToast("已回滚");
+      await loadArtifacts();
+      await loadServices();
+    } catch (e) {
+      showToast(e.message, true);
+    } finally {
+      setBusy(els.btnRollbackService, false);
+    }
+  }
+
   async function loadServices() {
     if (!state.selectedId) return;
     els.serviceList.innerHTML = "";
@@ -1233,15 +1652,19 @@
                 : ""
             }
           </div>
-          <div class="row-actions">
-            <button type="button" class="btn small" data-act="logs">日志</button>
-            <button type="button" class="btn small" data-act="edit">编辑</button>
-            <button type="button" class="btn small" data-act="restart">重启</button>
+          <div class="row-actions service-actions">
             ${
               running
                 ? `<button type="button" class="btn small danger" data-act="stop">停止</button>`
                 : `<button type="button" class="btn small cta-start" data-act="start">启动</button>`
             }
+            <button type="button" class="btn small" data-act="restart">重启</button>
+            <button type="button" class="btn small ghost" data-act="more" aria-expanded="false">更多</button>
+          </div>
+          <div class="service-more" hidden>
+            <button type="button" class="btn small" data-act="logs">日志</button>
+            <button type="button" class="btn small" data-act="artifacts">制品</button>
+            <button type="button" class="btn small" data-act="edit">编辑</button>
             <button type="button" class="btn small danger" data-act="remove">移除</button>
           </div>
         `;
@@ -1249,6 +1672,18 @@
         if (check) {
           check.addEventListener("change", syncBatchBar);
           check.addEventListener("click", (ev) => ev.stopPropagation());
+        }
+        const moreBtn = row.querySelector('[data-act="more"]');
+        const morePanel = row.querySelector(".service-more");
+        if (moreBtn && morePanel) {
+          moreBtn.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            const open = morePanel.hasAttribute("hidden");
+            morePanel.hidden = !open;
+            moreBtn.setAttribute("aria-expanded", open ? "true" : "false");
+            moreBtn.textContent = open ? "收起" : "更多";
+            row.classList.toggle("is-expanded", open);
+          });
         }
         row.querySelector('[data-act="logs"]').addEventListener("click", () => {
           state.logService = svc.name;
@@ -1259,10 +1694,17 @@
           });
           if (els.logAuto) els.logAuto.checked = true;
           if (els.logFollow) els.logFollow.checked = true;
+          expandSection("logs");
           fetchLogs();
           syncLogPoll();
         });
-        row.querySelector('[data-act="edit"]').addEventListener("click", () => editService(svc.name));
+        row.querySelector('[data-act="artifacts"]').addEventListener("click", () => {
+          focusArtifacts(svc.name);
+        });
+        row.querySelector('[data-act="edit"]').addEventListener("click", () => {
+          expandSection("definition");
+          editService(svc.name);
+        });
         row.querySelector('[data-act="restart"]').addEventListener("click", async (ev) => {
           setBusy(ev.currentTarget, true, "…");
           await restartService(svc.name);
@@ -1282,9 +1724,25 @@
             await startSavedService(svc.name);
           });
         }
+        const info = row.querySelector(".info");
+        if (info) {
+          info.style.cursor = "pointer";
+          info.title = "点击选中并联动制品区";
+          info.addEventListener("click", () => {
+            setFocusService(svc.name, { loadArtifacts: true, expandRelease: false });
+          });
+        }
         els.serviceList.appendChild(row);
       });
       syncBatchBar();
+      const names = list.map((s) => s.name).filter(Boolean);
+      if (state.focusService && names.includes(state.focusService)) {
+        setFocusService(state.focusService, { loadArtifacts: true, expandRelease: false });
+      } else if (!state.focusService && names.length === 1) {
+        setFocusService(names[0], { loadArtifacts: true, expandRelease: false });
+      } else if (state.focusService && !names.includes(state.focusService)) {
+        setFocusService(null, { loadArtifacts: false });
+      }
     } catch (e) {
       els.serviceEmpty.hidden = false;
       if (els.serviceBatchBar) els.serviceBatchBar.hidden = true;
@@ -1362,6 +1820,9 @@
       const spec = unwrapAgentData(res) || {};
       fillServiceForm(spec);
       setEditingMode(name);
+      setFocusService(name, { loadArtifacts: true, expandRelease: false });
+      if (specHasAdvanced(spec)) setAdvancedOpen(true);
+      expandSection("definition");
       els.formStart.scrollIntoView({ behavior: "smooth", block: "nearest" });
       showToast(`已载入 ${name}`);
     } catch (e) {
@@ -1407,6 +1868,12 @@
       });
       showToast(`已移除 ${name}`);
       if (state.editingName === name) resetServiceForm();
+      if (state.focusService === name) {
+        state.focusService = null;
+        if (els.artifactService) els.artifactService.value = "";
+        setArtifactServiceLabel("—");
+        syncArtifactPanel(false);
+      }
       if (state.logService === name) {
         state.logService = null;
         els.logTarget.textContent = "从服务列表点「日志」载入输出";
@@ -1443,6 +1910,7 @@
       }
       showToast("已保存（未启动）");
       setEditingMode(body.name);
+      setFocusService(body.name, { loadArtifacts: true, expandRelease: false });
       await loadServices();
     } catch (e) {
       els.startError.textContent = e.message;
@@ -1467,6 +1935,7 @@
       });
       showToast(`已启动 ${body.name}`);
       setEditingMode(body.name);
+      setFocusService(body.name, { loadArtifacts: true, expandRelease: false });
       await loadServices();
     } catch (e) {
       els.startError.textContent = e.message;
@@ -2044,6 +2513,54 @@
   if (els.btnBatchRestart) {
     els.btnBatchRestart.addEventListener("click", (ev) => runBatch(ev.currentTarget, "restart"));
   }
+  if (els.btnUploadArtifact) {
+    els.btnUploadArtifact.addEventListener("click", () => uploadArtifact());
+  }
+  if (els.btnReloadArtifacts) {
+    els.btnReloadArtifacts.addEventListener("click", () => loadArtifacts());
+  }
+  if (els.btnRollbackService) {
+    els.btnRollbackService.addEventListener("click", () => rollbackServiceArtifact());
+  }
+  if (els.artifactFile) {
+    els.artifactFile.addEventListener("change", syncArtifactFileLabel);
+  }
+  if (els.artifactDrop) {
+    const openPicker = () => {
+      if (els.artifactFile) els.artifactFile.click();
+    };
+    els.artifactDrop.addEventListener("click", openPicker);
+    els.artifactDrop.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        openPicker();
+      }
+    });
+    ["dragenter", "dragover"].forEach((evt) => {
+      els.artifactDrop.addEventListener(evt, (e) => {
+        e.preventDefault();
+        els.artifactDrop.classList.add("dragover");
+      });
+    });
+    ["dragleave", "drop"].forEach((evt) => {
+      els.artifactDrop.addEventListener(evt, (e) => {
+        e.preventDefault();
+        els.artifactDrop.classList.remove("dragover");
+      });
+    });
+    els.artifactDrop.addEventListener("drop", (e) => {
+      const files = e.dataTransfer && e.dataTransfer.files;
+      if (!files || !files.length || !els.artifactFile) return;
+      const dt = new DataTransfer();
+      dt.items.add(files[0]);
+      els.artifactFile.files = dt.files;
+      syncArtifactFileLabel();
+    });
+  }
+  syncArtifactPanel(false);
+  syncArtifactFileLabel();
+  initAdvancedToggle();
+  initCollapsibles();
   els.btnFetchLogs.addEventListener("click", () => fetchLogs());
   if (els.logAuto) {
     els.logAuto.addEventListener("change", syncLogPoll);

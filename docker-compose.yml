@@ -1,0 +1,74 @@
+# AxleOps compose demo / lab stack
+#
+#   cp deploy/docker/.env.example deploy/docker/.env   # edit secrets
+#   docker compose up -d --build
+#   # optional proxy: docker compose --profile proxy up -d --build
+#
+# Open http://127.0.0.1:9000  (seed user from .env)
+# Register Agent: http://agent:9100  (Docker network) or http://127.0.0.1:9100 from host
+
+name: axleops
+
+services:
+  admin:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.admin
+    image: axleops-admin:local
+    restart: unless-stopped
+    ports:
+      - "${ADMIN_PORT:-9000}:9000"
+    environment:
+      AXLEOPS_ADMIN_BIND: "0.0.0.0:9000"
+      AXLEOPS_ADMIN_DATA_DIR: /app/data
+      AXLEOPS_ADMIN_TOKEN: ${ADMIN_TOKEN:-change-me-admin-token}
+      AXLEOPS_ADMIN_SEED_USERNAME: ${ADMIN_SEED_USER:-admin}
+      AXLEOPS_ADMIN_SEED_PASSWORD: ${ADMIN_SEED_PASSWORD:-change-me-admin}
+      AXLEOPS_ADMIN_SESSION_TTL_HOURS: ${ADMIN_SESSION_TTL_HOURS:-24}
+    volumes:
+      - admin-data:/app/data
+    depends_on:
+      agent:
+        condition: service_started
+
+  agent:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.agent
+    image: axleops-agent:local
+    restart: unless-stopped
+    ports:
+      - "${AGENT_PORT:-9100}:9100"
+    environment:
+      AXLEOPS_BIND: "0.0.0.0:9100"
+      AXLEOPS_DATA_DIR: /app/data
+      AXLEOPS_TOKEN: ${AGENT_TOKEN:-change-me-agent-token}
+      AXLEOPS_WATCHDOG_ENABLED: ${AGENT_WATCHDOG:-true}
+    volumes:
+      - agent-data:/app/data
+      # Place JARs/scripts here; set jar_path to /apps/your.jar in the console
+      - ${APPS_DIR:-./deploy/docker/apps}:/apps
+
+  proxy:
+    profiles: ["proxy"]
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.proxy
+    image: axleops-proxy:local
+    restart: unless-stopped
+    ports:
+      - "${PROXY_PORT:-9200}:9200"
+    environment:
+      AXLEOPS_PROXY_BIND: "0.0.0.0:9200"
+      AXLEOPS_PROXY_DATA_DIR: /app/data
+      AXLEOPS_PROXY_TOKEN: ${PROXY_TOKEN:-change-me-proxy-token}
+      AXLEOPS_PROXY_TIMEOUT_SECS: ${PROXY_TIMEOUT_SECS:-120}
+    volumes:
+      - proxy-data:/app/data
+    depends_on:
+      - agent
+
+volumes:
+  admin-data:
+  agent-data:
+  proxy-data:

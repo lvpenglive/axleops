@@ -1,0 +1,24 @@
+[Unit]
+Description=AxleOps Proxy — boundary forwarder
+Documentation=https://github.com/lvpenglive/axleops
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{USER}}
+Group={{GROUP}}
+WorkingDirectory={{PREFIX}}/proxy
+ExecStart={{PREFIX}}/proxy/axleops-proxy
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+LimitNOFILE=65535
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths={{PREFIX}}/proxy
+
+[Install]
+WantedBy=multi-user.target

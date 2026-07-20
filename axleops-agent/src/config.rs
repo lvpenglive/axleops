@@ -96,6 +96,7 @@ impl Config {
         fs::create_dir_all(cfg.data_dir.join("pids"))?;
         fs::create_dir_all(cfg.data_dir.join("logs"))?;
         fs::create_dir_all(cfg.data_dir.join("services"))?;
+        fs::create_dir_all(cfg.data_dir.join("artifacts"))?;
 
         // Hot-rotated token overrides config.toml / env until next rotate.
         let token_file = cfg.data_dir.join("auth.token");

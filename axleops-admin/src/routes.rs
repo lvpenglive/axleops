@@ -11,13 +11,16 @@ use crate::users::{
     SetDisabledRequest, UserError, UserInfo,
 };
 use crate::{agents::RegistryError, proxies::ProxyRegistryError, proxy::ProxyError, AppState};
-use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::body::Bytes;
+use axum::extract::{DefaultBodyLimit, Path, Query, State};
+use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tower_http::services::{ServeDir, ServeFile};
+
+const ARTIFACT_BODY_LIMIT: usize = 512 * 1024 * 1024;
 
 pub fn router() -> Router<AppState> {
     let api = Router::new()
@@ -76,6 +79,26 @@ pub fn router() -> Router<AppState> {
             "/api/v1/agents/{id}/services/{name}/logs",
             get(service_logs),
         )
+        .route(
+            "/api/v1/agents/{id}/services/{name}/artifacts",
+            get(list_artifacts).post(upload_artifact),
+        )
+        .route(
+            "/api/v1/agents/{id}/services/{name}/artifacts/{version}/activate",
+            post(activate_artifact),
+        )
+        .route(
+            "/api/v1/agents/{id}/services/{name}/artifacts/{version}",
+            axum::routing::delete(delete_artifact),
+        )
+        .route(
+            "/api/v1/agents/{id}/services/{name}/publish",
+            post(publish_service),
+        )
+        .route(
+            "/api/v1/agents/{id}/services/{name}/rollback",
+            post(rollback_service),
+        )
         .route("/api/v1/proxies", get(list_proxies).post(register_proxy))
         .route(
             "/api/v1/proxies/{id}",
@@ -94,7 +117,8 @@ pub fn router() -> Router<AppState> {
             "/api/v1/proxies/{id}/upstreams/{upstream_id}",
             axum::routing::put(update_proxy_upstream).delete(delete_proxy_upstream),
         )
-        .route("/api/v1/proxies/{id}/import", post(import_upstream));
+        .route("/api/v1/proxies/{id}/import", post(import_upstream))
+        .layer(DefaultBodyLimit::max(ARTIFACT_BODY_LIMIT));
 
     let static_files = ServeDir::new("static")
         .not_found_service(ServeFile::new("static/index.html"));
@@ -816,6 +840,160 @@ async fn service_logs(
     let path = format!("/api/v1/services/{name}/logs?bytes={}", q.bytes);
     match crate::proxy::agent_get(&state.http, &agent, &path).await {
         Ok(v) => Ok(Json(ApiResponse::ok("ok", v))),
+        Err(e) => Err(proxy_err(e)),
+    }
+}
+
+async fn list_artifacts(
+    _auth: AuthUser,
+    State(state): State<AppState>,
+    Path((id, name)): Path<(String, String)>,
+) -> Result<Json<ApiResponse<Value>>, (StatusCode, Json<ApiResponse<()>>)> {
+    let agent = state.agents.get(&id).map_err(registry_err)?;
+    let path = format!("/api/v1/services/{name}/artifacts");
+    match crate::proxy::agent_get(&state.http, &agent, &path).await {
+        Ok(v) => Ok(Json(ApiResponse::ok("ok", v))),
+        Err(e) => Err(proxy_err(e)),
+    }
+}
+
+async fn upload_artifact(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Path((id, name)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<ApiResponse<Value>>, (StatusCode, Json<ApiResponse<()>>)> {
+    let agent = state.agents.get(&id).map_err(registry_err)?;
+    let ct = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream");
+    let path = format!("/api/v1/services/{name}/artifacts");
+    match crate::proxy::agent_post_raw(&state.http, &agent, &path, body.to_vec(), ct).await {
+        Ok(v) => {
+            audit(
+                &state,
+                &auth.0,
+                "service.artifact_upload",
+                "agent",
+                &id,
+                format!("upload artifact for {name}"),
+            );
+            Ok(Json(ApiResponse::ok("ok", v)))
+        }
+        Err(e) => Err(proxy_err(e)),
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct PublishBody {
+    version: String,
+    #[serde(default = "default_true")]
+    start: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct RollbackBody {
+    #[serde(default = "default_true")]
+    start: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+async fn activate_artifact(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Path((id, name, version)): Path<(String, String, String)>,
+) -> Result<Json<ApiResponse<Value>>, (StatusCode, Json<ApiResponse<()>>)> {
+    let agent = state.agents.get(&id).map_err(registry_err)?;
+    let path = format!("/api/v1/services/{name}/artifacts/{version}/activate");
+    match crate::proxy::agent_post_empty(&state.http, &agent, &path).await {
+        Ok(v) => {
+            audit(
+                &state,
+                &auth.0,
+                "service.artifact_activate",
+                "agent",
+                &id,
+                format!("activate {version} for {name}"),
+            );
+            Ok(Json(ApiResponse::ok("ok", v)))
+        }
+        Err(e) => Err(proxy_err(e)),
+    }
+}
+
+async fn delete_artifact(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Path((id, name, version)): Path<(String, String, String)>,
+) -> Result<Json<ApiResponse<Value>>, (StatusCode, Json<ApiResponse<()>>)> {
+    let agent = state.agents.get(&id).map_err(registry_err)?;
+    let path = format!("/api/v1/services/{name}/artifacts/{version}");
+    match crate::proxy::agent_delete(&state.http, &agent, &path).await {
+        Ok(v) => {
+            audit(
+                &state,
+                &auth.0,
+                "service.artifact_delete",
+                "agent",
+                &id,
+                format!("delete {version} for {name}"),
+            );
+            Ok(Json(ApiResponse::ok("ok", v)))
+        }
+        Err(e) => Err(proxy_err(e)),
+    }
+}
+
+async fn publish_service(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Path((id, name)): Path<(String, String)>,
+    Json(body): Json<PublishBody>,
+) -> Result<Json<ApiResponse<Value>>, (StatusCode, Json<ApiResponse<()>>)> {
+    let agent = state.agents.get(&id).map_err(registry_err)?;
+    let path = format!("/api/v1/services/{name}/publish");
+    match crate::proxy::agent_post_json(&state.http, &agent, &path, &body).await {
+        Ok(v) => {
+            audit(
+                &state,
+                &auth.0,
+                "service.publish",
+                "agent",
+                &id,
+                format!("publish {} for {name}", body.version),
+            );
+            Ok(Json(ApiResponse::ok("ok", v)))
+        }
+        Err(e) => Err(proxy_err(e)),
+    }
+}
+
+async fn rollback_service(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Path((id, name)): Path<(String, String)>,
+    body: Option<Json<RollbackBody>>,
+) -> Result<Json<ApiResponse<Value>>, (StatusCode, Json<ApiResponse<()>>)> {
+    let agent = state.agents.get(&id).map_err(registry_err)?;
+    let path = format!("/api/v1/services/{name}/rollback");
+    let payload = body.map(|b| b.0).unwrap_or(RollbackBody { start: true });
+    match crate::proxy::agent_post_json(&state.http, &agent, &path, &payload).await {
+        Ok(v) => {
+            audit(
+                &state,
+                &auth.0,
+                "service.rollback",
+                "agent",
+                &id,
+                format!("rollback {name}"),
+            );
+            Ok(Json(ApiResponse::ok("ok", v)))
+        }
         Err(e) => Err(proxy_err(e)),
     }
 }

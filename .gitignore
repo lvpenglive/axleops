@@ -9,6 +9,8 @@ Cargo.lock.bak
 **/*.db
 **/*.log
 **/*.pid.json
+**/.env
+deploy/docker/.env
 
 # OS / IDE
 .DS_Store

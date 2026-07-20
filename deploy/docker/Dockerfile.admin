@@ -1,0 +1,23 @@
+# Build context: repository root
+#   docker build -f deploy/docker/Dockerfile.admin -t axleops-admin .
+FROM rust:1-bookworm AS builder
+WORKDIR /src
+COPY axleops-admin /src/axleops-admin
+WORKDIR /src/axleops-admin
+RUN cargo build --release
+
+FROM debian:bookworm-slim
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates curl \
+  && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY --from=builder /src/axleops-admin/target/release/axleops-admin /app/axleops-admin
+COPY axleops-admin/static /app/static
+COPY axleops-admin/config.example.toml /app/config.example.toml
+ENV AXLEOPS_ADMIN_BIND=0.0.0.0:9000 \
+    AXLEOPS_ADMIN_DATA_DIR=/app/data
+EXPOSE 9000
+VOLUME ["/app/data"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:9000/health >/dev/null || exit 1
+CMD ["./axleops-admin"]

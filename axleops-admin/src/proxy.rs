@@ -57,6 +57,26 @@ pub async fn agent_post_empty(
     parse_json(resp).await
 }
 
+/// Forward raw body (e.g. multipart upload) to the agent.
+pub async fn agent_post_raw(
+    client: &reqwest::Client,
+    agent: &AgentInfo,
+    path: &str,
+    body: Vec<u8>,
+    content_type: &str,
+) -> Result<Value, ProxyError> {
+    let url = format!("{}{path}", agent.base_url);
+    let resp = client
+        .post(&url)
+        .header("X-AxleOps-Token", &agent.token)
+        .header(reqwest::header::CONTENT_TYPE, content_type)
+        .timeout(std::time::Duration::from_secs(600))
+        .body(body)
+        .send()
+        .await?;
+    parse_json(resp).await
+}
+
 pub async fn agent_put_json(
     client: &reqwest::Client,
     agent: &AgentInfo,

@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/app.css?v=20260720v03" />
+  <link rel="stylesheet" href="/app.css?v=20260720v06" />
   <script>
     (function () {
       try {
@@ -306,78 +306,174 @@
           <p id="ping-result" class="ping-result mono" hidden></p>
 
           <div class="workspace-grid">
-            <section class="surface">
+            <section class="surface collapsible" data-collapse="runtime" id="section-runtime">
               <div class="surface-head compact">
-                <div>
+                <button type="button" class="collapse-toggle" data-collapse-toggle aria-expanded="true" title="展开/折叠">
+                  <span class="collapse-chevron" aria-hidden="true"></span>
+                </button>
+                <div class="surface-head-text">
                   <p class="kicker">Runtime</p>
                   <h3>服务 <span id="service-count" class="count-pill">0</span></h3>
                 </div>
                 <button type="button" id="btn-reload-services" class="btn ghost small">刷新</button>
               </div>
-              <div id="service-batch-bar" class="batch-bar">
-                <label class="inline check">
-                  <input type="checkbox" id="chk-select-all-services" />
-                  全选
-                </label>
-                <span id="batch-selected-count" class="batch-count muted">已选 0</span>
-                <div class="batch-actions">
-                  <button type="button" id="btn-batch-start" class="btn small" disabled>批量启动</button>
-                  <button type="button" id="btn-batch-stop" class="btn small danger" disabled>批量停止</button>
-                  <button type="button" id="btn-batch-restart" class="btn small" disabled>批量重启</button>
+              <div class="surface-body">
+                <div id="service-batch-bar" class="batch-bar">
+                  <label class="inline check">
+                    <input type="checkbox" id="chk-select-all-services" />
+                    全选
+                  </label>
+                  <span id="batch-selected-count" class="batch-count muted">已选 0</span>
+                  <div class="batch-actions">
+                    <button type="button" id="btn-batch-start" class="btn small" disabled>批量启动</button>
+                    <button type="button" id="btn-batch-stop" class="btn small danger" disabled>批量停止</button>
+                    <button type="button" id="btn-batch-restart" class="btn small" disabled>批量重启</button>
+                  </div>
                 </div>
+                <div id="service-list" class="service-list"></div>
+                <p id="service-empty" class="empty-state inline" hidden>
+                  <span class="empty-title">还没有服务</span>
+                  <span class="muted">在右侧保存配置，或直接启动</span>
+                </p>
               </div>
-              <div id="service-list" class="service-list"></div>
-              <p id="service-empty" class="empty-state inline" hidden>
-                <span class="empty-title">还没有服务</span>
-                <span class="muted">在右侧保存配置，或直接启动</span>
-              </p>
             </section>
 
-            <section class="surface">
+            <section class="surface collapsible" data-collapse="definition" id="section-definition">
               <div class="surface-head compact">
-                <div>
+                <button type="button" class="collapse-toggle" data-collapse-toggle aria-expanded="true" title="展开/折叠">
+                  <span class="collapse-chevron" aria-hidden="true"></span>
+                </button>
+                <div class="surface-head-text">
                   <p class="kicker">Definition</p>
                   <h3 id="form-title">配置服务</h3>
                 </div>
                 <button type="button" id="btn-reset-form" class="btn ghost small">新建</button>
               </div>
-              <form id="form-start" class="form-grid">
-                <label>名称<input name="name" id="field-name" required placeholder="order-service" /></label>
-                <label>类型
-                  <select name="kind" id="start-kind">
-                    <option value="jar">jar</option>
-                    <option value="script">script</option>
-                    <option value="command">command</option>
-                  </select>
-                </label>
-                <label class="kind-jar span-2">JAR 路径<input name="jar_path" placeholder="E:\app\app.jar" /></label>
-                <label class="kind-jar">JVM 参数<input name="jvm_args" placeholder="-Xms256m -Xmx512m" /></label>
-                <label class="kind-jar">App 参数<input name="app_args" placeholder="--spring.profiles.active=prod" /></label>
-                <label class="kind-script hidden span-2">脚本路径<input name="script_path" placeholder="E:\scripts\run.ps1" /></label>
-                <label class="kind-script hidden">解释器<input name="interpreter" placeholder="powershell / bash" /></label>
-                <label class="kind-command hidden span-2">命令<input name="command" placeholder="node" /></label>
-                <label class="kind-script kind-command hidden span-2">参数<input name="args" placeholder="arg1 arg2" /></label>
-                <label>工作目录<input name="work_dir" placeholder="可选" /></label>
-                <label>Health URL<input name="health_url" placeholder="http://127.0.0.1:8080/actuator/health" /></label>
-                <label class="span-2">环境变量
-                  <textarea name="env" id="field-env" rows="3" placeholder="KEY=value&#10;SPRING_PROFILES_ACTIVE=prod"></textarea>
-                </label>
-                <div class="form-actions">
-                  <button type="button" id="btn-save-service" class="btn">仅保存</button>
-                  <button type="button" id="btn-start-service" class="btn primary">保存并启动</button>
-                </div>
-                <p id="start-error" class="error" hidden></p>
-              </form>
+              <div class="surface-body">
+                <form id="form-start" class="form-grid">
+                  <label>名称<input name="name" id="field-name" required placeholder="order-service" /></label>
+                  <label>类型
+                    <select name="kind" id="start-kind">
+                      <option value="jar">jar</option>
+                      <option value="script">script</option>
+                      <option value="command">command</option>
+                    </select>
+                  </label>
+                  <label class="kind-jar span-2">JAR 路径<input name="jar_path" placeholder="E:\app\app.jar 或 /apps/app.jar" /></label>
+                  <label class="kind-script hidden span-2">脚本路径<input name="script_path" placeholder="E:\scripts\run.ps1" /></label>
+                  <label class="kind-command hidden span-2">命令<input name="command" placeholder="node" /></label>
+
+                  <div class="form-advanced span-2">
+                    <button type="button" id="btn-toggle-advanced" class="form-advanced-toggle" aria-expanded="false">
+                      <span class="collapse-chevron" aria-hidden="true"></span>
+                      <span>高级选项</span>
+                      <span class="muted form-advanced-hint">JVM / 参数 / 工作目录 / Health / 环境变量</span>
+                    </button>
+                    <div id="form-advanced-body" class="form-advanced-body" hidden>
+                      <div class="form-grid form-advanced-grid">
+                        <label class="kind-jar">JVM 参数<input name="jvm_args" placeholder="-Xms256m -Xmx512m" /></label>
+                        <label class="kind-jar">App 参数<input name="app_args" placeholder="--spring.profiles.active=prod" /></label>
+                        <label class="kind-script hidden">解释器<input name="interpreter" placeholder="powershell / bash" /></label>
+                        <label class="kind-script kind-command hidden span-2">参数<input name="args" placeholder="arg1 arg2" /></label>
+                        <label>工作目录<input name="work_dir" placeholder="可选" /></label>
+                        <label>Health URL<input name="health_url" placeholder="http://127.0.0.1:8080/actuator/health" /></label>
+                        <label class="span-2">环境变量
+                          <textarea name="env" id="field-env" rows="3" placeholder="KEY=value&#10;SPRING_PROFILES_ACTIVE=prod"></textarea>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="form-actions">
+                    <button type="button" id="btn-save-service" class="btn">仅保存</button>
+                    <button type="button" id="btn-start-service" class="btn primary">保存并启动</button>
+                  </div>
+                  <p id="start-error" class="error" hidden></p>
+                </form>
+              </div>
             </section>
           </div>
 
-          <section class="surface log-surface">
+          <section class="surface artifact-surface collapsible is-collapsed" data-collapse="release" id="artifact-panel">
             <div class="surface-head compact">
-              <div>
+              <button type="button" class="collapse-toggle" data-collapse-toggle aria-expanded="false" title="展开/折叠">
+                <span class="collapse-chevron" aria-hidden="true"></span>
+              </button>
+              <div class="surface-head-text">
+                <p class="kicker">Release</p>
+                <h3>制品发布 <span id="artifact-service-label" class="muted collapse-summary">—</span></h3>
+              </div>
+              <div class="row-actions">
+                <button type="button" id="btn-reload-artifacts" class="btn ghost small" disabled>刷新</button>
+                <button type="button" id="btn-rollback-service" class="btn ghost small" disabled title="切换到上一制品并启动">回滚</button>
+              </div>
+            </div>
+
+            <div class="surface-body">
+            <div class="artifact-target" id="artifact-idle" hidden>
+              <p class="artifact-idle-title">先选择服务</p>
+              <p class="muted">点击上方服务行，或「更多 → 制品」，将自动联动到制品区。</p>
+            </div>
+
+            <div class="artifact-body" id="artifact-body">
+              <div class="artifact-target-bar">
+                <span class="artifact-target-kicker">当前服务</span>
+                <strong id="artifact-service-name" class="artifact-target-name">—</strong>
+                <span class="muted artifact-flow">停 → 换包 → 启 · 仅 jar / script</span>
+              </div>
+
+              <form id="form-artifact" class="artifact-upload" autocomplete="off">
+                <input type="hidden" id="artifact-service" name="service" value="" />
+                <input id="artifact-file" class="artifact-file-input" name="file" type="file" tabindex="-1" aria-hidden="true" />
+
+                <div class="artifact-drop" id="artifact-drop" role="button" tabindex="0" aria-label="选择制品文件">
+                  <span class="artifact-drop-icon" aria-hidden="true">↑</span>
+                  <span class="artifact-drop-title" id="artifact-file-label">拖拽文件到此处，或点击选择</span>
+                  <span class="muted" id="artifact-file-hint">支持 JAR / 脚本，最大约 512MB</span>
+                </div>
+
+                <div class="artifact-meta">
+                  <label class="artifact-field">
+                    <span>版本号（可选）</span>
+                    <input id="artifact-version" name="version" placeholder="留空则自动生成时间戳" />
+                  </label>
+                  <label class="artifact-field">
+                    <span>备注（可选）</span>
+                    <input id="artifact-note" name="note" placeholder="如 hotfix、build-123" />
+                  </label>
+                </div>
+
+                <div class="artifact-actions">
+                  <button type="button" id="btn-upload-artifact" class="btn primary">上传制品</button>
+                </div>
+                <p id="artifact-error" class="error" hidden></p>
+              </form>
+
+              <div class="artifact-history">
+                <div class="artifact-history-head">
+                  <span class="kicker">Versions</span>
+                  <h4>已上传版本</h4>
+                </div>
+                <div id="artifact-list" class="artifact-list"></div>
+                <p id="artifact-empty" class="empty-state inline" hidden>
+                  <span class="empty-title">暂无版本</span>
+                  <span class="muted">上传后在此发布或回滚</span>
+                </p>
+              </div>
+            </div>
+            </div>
+          </section>
+
+          <section class="surface log-surface collapsible is-collapsed" data-collapse="logs" id="section-logs">
+            <div class="surface-head compact">
+              <button type="button" class="collapse-toggle" data-collapse-toggle aria-expanded="false" title="展开/折叠">
+                <span class="collapse-chevron" aria-hidden="true"></span>
+              </button>
+              <div class="surface-head-text">
                 <p class="kicker">Observability</p>
                 <h3>日志</h3>
               </div>
-              <div class="row-actions log-controls">
+              <div class="row-actions log-controls surface-head-tools">
                 <label class="inline">bytes
                   <input id="log-bytes" type="number" min="1024" value="32768" />
                 </label>
@@ -401,8 +497,10 @@
                 <button type="button" id="btn-fetch-logs" class="btn small" disabled>拉取</button>
               </div>
             </div>
-            <p id="log-target" class="log-hint mono muted">从服务列表点「日志」载入输出</p>
-            <pre id="log-content" class="log-box"></pre>
+            <div class="surface-body">
+              <p id="log-target" class="log-hint mono muted">从服务列表点「日志」载入输出</p>
+              <pre id="log-content" class="log-box"></pre>
+            </div>
           </section>
         </div>
 
@@ -482,6 +580,6 @@
     <div id="toast" class="toast" hidden></div>
   </div>
 
-  <script src="/app.js?v=20260720v03"></script>
+  <script src="/app.js?v=20260720v06"></script>
 </body>
 </html>

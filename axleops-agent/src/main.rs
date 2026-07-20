@@ -1,9 +1,11 @@
+mod artifacts;
 mod auth;
 mod config;
 mod models;
 mod process;
 mod routes;
 
+use artifacts::ArtifactStore;
 use config::Config;
 use process::ProcessManager;
 use std::sync::{Arc, RwLock};
@@ -17,6 +19,7 @@ pub struct AppState {
     /// Live auth token (may be hot-rotated; also persisted under data_dir/auth.token).
     pub token: Arc<RwLock<String>>,
     pub processes: Arc<ProcessManager>,
+    pub artifacts: Arc<ArtifactStore>,
 }
 
 #[tokio::main]
@@ -37,6 +40,7 @@ async fn main() -> anyhow::Result<()> {
 
     let processes = Arc::new(ProcessManager::new(&config));
     processes.recover_desired();
+    let artifacts = Arc::new(ArtifactStore::new(&config.data_dir));
 
     if config.watchdog_enabled {
         let interval = Duration::from_secs(config.watchdog_interval_secs.max(5));
@@ -59,6 +63,7 @@ async fn main() -> anyhow::Result<()> {
 
     let state = AppState {
         processes,
+        artifacts,
         token,
         config: Arc::new(config),
     };

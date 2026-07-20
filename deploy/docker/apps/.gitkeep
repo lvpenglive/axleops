@@ -1,0 +1,2 @@
+# Keep mount point for agent JAR/scripts (see docker-compose APPS_DIR).
+.gitkeep

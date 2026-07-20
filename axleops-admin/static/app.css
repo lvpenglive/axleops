@@ -963,13 +963,169 @@ input:focus, select:focus, textarea:focus {
 
 .surface { padding: 0.9rem 1rem 1.05rem; }
 .surface-head { margin-bottom: 0.7rem; }
-.surface-head.compact h3 {
-  margin: 0;
-  font-size: 1rem;
-  font-weight: 650;
+.surface-head.compact {
   display: flex;
   align-items: center;
-  gap: 0.45rem;
+  gap: 0.45rem 0.65rem;
+  flex-wrap: wrap;
+}
+.surface-head.compact h3 {
+  margin: 0;
+}
+.surface-head-text {
+  flex: 1;
+  min-width: 0;
+}
+.surface-head-text h3 .collapse-summary,
+.surface-head-text h3 .muted {
+  font-weight: 500;
+  font-size: 0.82rem;
+  margin-left: 0.35rem;
+}
+
+.collapse-toggle {
+  flex-shrink: 0;
+  width: 1.85rem;
+  height: 1.85rem;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--muted);
+  cursor: pointer;
+}
+.collapse-toggle:hover {
+  border-color: var(--line-hot);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.collapse-chevron {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg);
+  transition: transform 0.18s var(--ease);
+  margin-top: -0.15rem;
+}
+.collapsible.is-collapsed .collapse-chevron {
+  transform: rotate(-45deg);
+  margin-top: 0.1rem;
+}
+.collapsible .surface-body {
+  display: block;
+}
+.collapsible.is-collapsed .surface-body {
+  display: none;
+}
+.collapsible.is-collapsed .surface-head {
+  margin-bottom: 0;
+}
+.collapsible.is-collapsed .surface-head-tools {
+  display: none;
+}
+.collapsible.is-collapsed {
+  padding-bottom: 0.85rem;
+}
+
+.service-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.45rem 0.65rem;
+  padding: 0.7rem 0.75rem;
+  border-radius: var(--rs);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  min-width: 0;
+}
+.service-item .service-actions {
+  grid-column: 3;
+  justify-self: end;
+}
+.service-item .service-more {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding-top: 0.35rem;
+  margin-top: 0.15rem;
+  border-top: 1px solid var(--line);
+}
+.service-item .service-more[hidden] {
+  display: none !important;
+}
+.service-item.focus-service {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+  background: var(--accent-soft-2);
+}
+
+.form-advanced {
+  margin-top: 0.35rem;
+  padding-top: 0.15rem;
+}
+
+.form-advanced-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin: 0;
+  padding: 0.65rem 0.75rem;
+  border-radius: var(--rs);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  font-size: 0.86rem;
+  cursor: pointer;
+  text-align: left;
+}
+
+.form-advanced-toggle:hover {
+  border-color: var(--line-hot);
+  background: var(--accent-soft);
+}
+
+.form-advanced-toggle .collapse-chevron {
+  transform: rotate(-45deg);
+  margin-top: 0.1rem;
+}
+
+.form-advanced-toggle.is-open .collapse-chevron {
+  transform: rotate(45deg);
+  margin-top: -0.15rem;
+}
+
+.form-advanced-hint {
+  margin-left: auto;
+  font-weight: 500;
+  font-size: 0.75rem;
+}
+
+.form-advanced-body {
+  margin-top: 0.65rem;
+  padding: 0.75rem 0.85rem 0.35rem;
+  border-radius: var(--rs);
+  border: 1px solid var(--line);
+  background: var(--input-bg);
+}
+
+.form-advanced-grid {
+  margin: 0;
+}
+
+.form-advanced-grid label {
+  margin-top: 0.55rem;
+}
+
+.form-advanced-grid label:first-child,
+.form-advanced-grid label:nth-child(2) {
+  margin-top: 0;
 }
 
 .count-pill {
@@ -985,17 +1141,8 @@ input:focus, select:focus, textarea:focus {
 }
 
 .service-item {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 0.85rem;
-  padding: 0.85rem 0.9rem;
-  border-radius: 11px;
-  border: 1px solid var(--line);
-  background: var(--surface-2);
   transition: border-color 0.2s, background 0.2s, transform 0.15s;
   animation: rise 0.4s var(--ease) both;
-  min-width: 0;
   overflow: hidden;
 }
 
@@ -1106,7 +1253,16 @@ input:focus, select:focus, textarea:focus {
 
 @media (max-width: 700px) {
   .form-grid { grid-template-columns: 1fr; }
-  .service-item { flex-direction: column; }
+  .service-item {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .service-item .service-actions {
+    grid-column: 1 / -1;
+    justify-self: stretch;
+  }
+  .service-item .service-more {
+    grid-column: 1 / -1;
+  }
 }
 
 .inline {
@@ -1296,3 +1452,304 @@ input:focus, select:focus, textarea:focus {
   background: var(--toast-error-bg);
   color: var(--danger-text);
 }
+
+/* —— Artifact / Release —— */
+.artifact-surface {
+  display: flex;
+  flex-direction: column;
+  gap: 1.15rem;
+}
+
+.artifact-target {
+  padding: 1.35rem 1.1rem;
+  border-radius: var(--rs);
+  border: 1px dashed var(--line);
+  background: var(--accent-soft-2);
+  text-align: center;
+}
+
+.artifact-idle-title {
+  margin: 0 0 0.45rem;
+  font-size: 0.95rem;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.artifact-target p.muted {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.artifact-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.artifact-target-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.45rem 0.85rem;
+  padding: 0.75rem 0.9rem;
+  border-radius: var(--rs);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+}
+
+.artifact-target-kicker {
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.artifact-target-name {
+  font-size: 1.05rem;
+  color: var(--accent);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: min(28rem, 100%);
+}
+
+.artifact-flow {
+  margin-left: auto;
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.artifact-upload {
+  display: flex;
+  flex-direction: column;
+  gap: 1.15rem;
+  max-width: 40rem;
+}
+
+.artifact-file-input {
+  display: none !important;
+}
+
+.artifact-drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-height: 8.5rem;
+  margin: 0;
+  padding: 1.6rem 1.4rem;
+  box-sizing: border-box;
+  border-radius: 12px;
+  border: 1.5px dashed color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: var(--input-bg);
+  cursor: pointer;
+  user-select: none;
+  transition: border-color 0.15s var(--ease), background 0.15s var(--ease), box-shadow 0.15s var(--ease);
+}
+
+.artifact-drop:hover,
+.artifact-drop.dragover,
+.artifact-drop:focus-visible {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 4px var(--accent-soft-2);
+  outline: none;
+}
+
+.artifact-drop-icon {
+  display: grid;
+  place-items: center;
+  width: 2.1rem;
+  height: 2.1rem;
+  border-radius: 999px;
+  border: 1px solid var(--line-hot);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.artifact-drop-title {
+  font-size: 0.98rem;
+  font-weight: 600;
+  color: var(--text);
+  text-align: center;
+  line-height: 1.45;
+  max-width: 26rem;
+  word-break: break-word;
+}
+
+.artifact-drop .muted {
+  font-size: 0.8rem;
+  text-align: center;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.artifact-drop.has-file {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  background: var(--accent-soft-2);
+}
+
+.artifact-meta {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+
+.artifact-field {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+  gap: 0.45rem !important;
+  margin: 0 !important;
+  width: 100%;
+  font-size: 0.8rem;
+  font-weight: 550;
+  color: var(--muted);
+}
+
+.artifact-field span {
+  display: block;
+}
+
+.artifact-field input,
+.artifact-meta input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.artifact-meta label {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.artifact-actions {
+  display: flex;
+  justify-content: flex-start;
+  padding-top: 0.2rem;
+}
+
+.artifact-actions .btn.primary {
+  min-width: 8.5rem;
+  margin: 0;
+  padding: 0.7rem 1.2rem;
+}
+
+.artifact-history {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  margin-top: 0.15rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--line);
+}
+
+.artifact-history-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.artifact-history-head h4 {
+  margin: 0;
+  font-size: 0.98rem;
+  font-weight: 650;
+}
+
+.artifact-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+#artifact-empty.empty-state {
+  margin-top: 0;
+  padding: 1.35rem 1rem;
+}
+
+.artifact-item {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 0.95rem 1rem;
+  border-radius: var(--rs);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  min-width: 0;
+  animation: rise 0.28s var(--ease) both;
+}
+
+.artifact-item.active {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: var(--accent-soft-2);
+}
+
+.artifact-item .info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.artifact-item .info strong {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-item .meta {
+  font-size: 0.78rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+
+.artifact-item .row-actions {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  justify-content: flex-end;
+}
+
+@media (min-width: 720px) {
+  .artifact-meta {
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem 1.15rem;
+  }
+}
+
+@media (max-width: 700px) {
+  .artifact-meta {
+    grid-template-columns: 1fr;
+  }
+  .artifact-actions .btn.primary {
+    width: 100%;
+  }
+  .artifact-flow {
+    margin-left: 0;
+    width: 100%;
+  }
+  .artifact-item {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+

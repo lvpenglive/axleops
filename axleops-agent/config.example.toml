@@ -6,8 +6,9 @@
 #   AXLEOPS_HEALTH_PROBE_CACHE_SECS / AXLEOPS_HEALTH_KILL_ON_START_FAIL
 #
 # Clients must send header: X-AxleOps-Token: <token>
-# Runtime under data_dir: services/ pids/ logs/
+# Runtime under data_dir: services/ pids/ logs/ artifacts/
 # start 会把服务标成 desired_running；stop 清除。Agent 重启与崩溃后看门狗会按标记拉起。
+# 制品发布：POST /api/v1/services/{name}/artifacts（multipart file）后 publish / rollback。
 
 bind = "0.0.0.0:9100"
 token = "change-me-to-a-long-secret"

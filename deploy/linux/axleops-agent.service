@@ -1,0 +1,22 @@
+[Unit]
+Description=AxleOps Agent — machine process manager
+Documentation=https://github.com/lvpenglive/axleops
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{USER}}
+Group={{GROUP}}
+WorkingDirectory={{PREFIX}}/agent
+ExecStart={{PREFIX}}/agent/axleops-agent
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+LimitNOFILE=65535
+# Agent may start JARs/scripts outside its install dir — keep sandbox light.
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

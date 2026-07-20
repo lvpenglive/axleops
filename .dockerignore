@@ -1,0 +1,18 @@
+# Ignore build artifacts and local secrets when sending context to Docker.
+.git
+.github
+**/target
+**/data
+**/*.db
+**/.cargo-kylin
+**/.rustup-kylin
+dist
+docs
+*.md
+!README.md
+deploy/linux
+deploy/windows
+**/.env
+**/config.toml
+**/auth.token
+**/*.log

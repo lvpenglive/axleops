@@ -20,7 +20,7 @@
 |------|------|
 | `axleops-agent/` | 机器端 Agent，默认 `0.0.0.0:9100` |
 | `axleops-admin/` | 控制面与静态 UI，默认 `0.0.0.0:9000` |
-| `axleops-proxy/` | 边界转发层，默认 `0.0.0.0:9200` |
+| `deploy/` | Linux systemd / Windows 服务 / Docker Compose 安装 |
 
 Admin 控制台左侧可切换 **Agents / Proxies**：登记多个 Proxy 后 Ping、拉取上游，并可一键导入为 Agent。
 
@@ -62,10 +62,13 @@ Admin 控制台左侧可切换 **Agents / Proxies**：登记多个 Proxy 后 Pin
 
 ### v0.4 — 交付与部署增强
 
-- 制品上传 / 版本号（JAR 换包后启停）
-- 简单发布：停 → 换文件 → 启；可选回滚
-- Windows 服务 / Linux systemd 安装脚本
-- 可选 Docker / 一键安装包
+- ~~制品上传 / 版本号（JAR 换包后启停）~~
+- ~~简单发布：停 → 换文件 → 启；可选回滚~~
+- ~~Windows 服务 / Linux systemd 安装脚本~~（`deploy/`）
+- ~~可选 Docker / 一键安装包~~（`docker compose` + `deploy/docker/up.sh`）
+
+制品：Agent `data/artifacts/{service}/{version}/`；API `…/artifacts`、`…/publish`、`…/rollback`；控制台服务行「制品」。
+Docker：见 `deploy/docker/README.md`；宿主机进程管理仍推荐 systemd / Windows 服务。
 
 ### v0.5+ — 远期
 
@@ -249,16 +252,68 @@ Windows 要打 Linux 包时，优先用上面的 Actions，或在 WSL 里执行�
 **启动示例：**
 
 ```bash
-# Linux / macOS
+# Linux / macOS（前台）
 cd /opt/axleops/agent && ./axleops-agent
 cd /opt/axleops/proxy && ./axleops-proxy
 cd /opt/axleops/admin && ./axleops-admin
 
-# Windows（PowerShell）
+# Windows（PowerShell 前台）
 cd E:\axleops\agent; .\axleops-agent.exe
 cd E:\axleops\proxy; .\axleops-proxy.exe
 cd E:\axleops\admin; .\axleops-admin.exe
 ```
+
+#### 安装为系统服务（推荐生产）
+
+解压发布包或在仓库根目录执行（需已有 release 二进制，或包内 `agent/` / `admin/` / `proxy/`）：
+
+**Linux（systemd）：**
+
+```bash
+# 默认安装到 /opt/axleops/<组件>，创建系统用户 axleops，并 enable
+sudo ./deploy/linux/install.sh agent --start
+sudo ./deploy/linux/install.sh admin --start
+# 可选
+sudo ./deploy/linux/install.sh proxy --start
+
+systemctl status axleops-agent
+journalctl -u axleops-admin -f
+
+# 卸载（加 --purge 删除安装目录）
+sudo ./deploy/linux/uninstall.sh agent
+```
+
+Agent 若以非 root 运行，需保证其对业务 JAR / 脚本路径有读和执行权限；也可用 `sudo ./deploy/linux/install.sh agent --user root --start`。
+
+**Windows（管理员 PowerShell）：**
+
+```powershell
+# 默认安装到 C:\axleops\<组件>
+# 若本机有 NSSM 则注册为 Windows 服务；否则注册开机 Scheduled Task
+.\deploy\windows\install.ps1 -Component agent -Start
+.\deploy\windows\install.ps1 -Component admin -Start
+
+# 强制用定时任务 / 指定 NSSM
+.\deploy\windows\install.ps1 -Component agent -Method ScheduledTask -Start
+.\deploy\windows\install.ps1 -Component agent -Method Nssm -NssmPath C:\Tools\nssm\nssm.exe -Start
+
+.\deploy\windows\uninstall.ps1 -Component agent
+```
+
+详见 `deploy/README.md`。
+
+#### Docker 一键（实验 / 联调）
+
+需本机 Docker Compose。首次：
+
+```bash
+./deploy/docker/up.sh
+# Windows: .\deploy\docker\up.ps1
+```
+
+会生成 `deploy/docker/.env`、构建镜像并启动 Admin + Agent。浏览器打开 http://127.0.0.1:9000 ，登记 Agent 时 Base URL 用 `http://agent:9100`，Token 为 `.env` 里的 `AGENT_TOKEN`。带 Proxy：`./deploy/docker/up.sh --profile proxy`。
+
+说明见 `deploy/docker/README.md`。容器内 Agent 适合联调；要管宿主机 JAR 进程请用上面的 systemd / Windows 服务安装。
 
 ### 5. 多机组网清单
 
@@ -291,8 +346,9 @@ curl -H "X-AxleOps-Token: <proxy-token>" http://<proxy-host>:9200/api/v1/upstrea
 2. 涉及的组件 `cargo build --release`（agent / admin / proxy）  
 3. 停旧进程 → 替换二进制（Admin 同步 `static/`）→ 启新进程  
 4. 对照新的 `config.example.toml` 合并配置  
+5. 若用了服务安装：`systemctl restart axleops-*` 或 Windows 上 `Restart-Service AxleOps-*` / 重跑任务  
 
-开机自启、systemd / Windows 服务安装脚本规划在 **v0.4**。
+开机自启：见上文 **安装为系统服务**（`deploy/`）。
 
 ---
 
