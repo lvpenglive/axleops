@@ -1,12 +1,19 @@
 # AxleOps
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![GitHub release](https://img.shields.io/github/v/release/lvpenglive/axleops?include_prereleases)](https://github.com/lvpenglive/axleops/releases)
+
 微服务及其他服务启停管理：支持 JAR、shell / Python 等脚本和通用命令。
 
-- Agent：机器端进程生命周期（启停、日志、探活）
+**当前版本：v0.4.0**（见 [CHANGELOG](CHANGELOG.md)）
+
+- Agent：机器端进程生命周期（启停、日志、探活、制品发布）
 - Admin：控制面 + Web 控制台 + SQLite Agent 注册
 - Proxy：Admin 与 Agent 之间的边界转发（跨网区）
 
-仓库：https://github.com/lvpenglive/axleops
+仓库：https://github.com/lvpenglive/axleops  
+
+文档：[贡献指南](CONTRIBUTING.md) · [安全策略](SECURITY.md) · [部署脚本](deploy/README.md)
 
 ## 预览
 
@@ -26,7 +33,7 @@ Admin 控制台左侧可切换 **Agents / Proxies**：登记多个 Proxy 后 Pin
 
 ## 版本功能计划
 
-当前基线为 **v0.1.0**。
+当前发布版本为 **v0.4.0**。详细变更见 [CHANGELOG.md](CHANGELOG.md)。
 
 ### v0.1 — 基线（已完成）
 
@@ -74,7 +81,9 @@ Docker：见 `deploy/docker/README.md`；宿主机进程管理仍推荐 systemd 
 
 依赖图与顺序启停、告警（钉钉 / 企微）、细粒度 RBAC、Admin 侧规格镜像、多环境（dev / staging / prod）
 
-**建议落地顺序：** v0.2 → v0.3（账号体系 + 审计 + 开机拉起 / 崩溃保活）→ 有换包需求再开 v0.4。
+**建议落地顺序：** v0.2 → v0.3 → v0.4（已完成）→ 有告警 / 多服务编排需求再开 v0.5+。
+
+生产上线前请过一遍 [SECURITY.md 检查清单](SECURITY.md#production-checklist生产上线前)。
 
 ---
 
