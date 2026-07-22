@@ -192,7 +192,7 @@
             </div>
             <button type="button" id="btn-cancel-proxy-register" class="btn ghost small">取消</button>
           </div>
-          <p class="muted form-hint">填写 axleops-proxy 的根地址与 Token（不是下游 Agent Token）。可登记多个 Proxy。</p>
+          <p class="muted form-hint">填写 axleops-proxy 的根地址与 <strong>Proxy Token</strong>（config.toml 的 token，不是下游 Agent Token）。Ping 会校验该 Token；可登记多个 Proxy。</p>
           <form id="form-proxy-register" class="form-grid">
             <label>名称<input name="name" required placeholder="dmz-proxy-east" /></label>
             <label>Base URL<input name="base_url" required placeholder="http://10.0.0.2:9200" /></label>
@@ -249,11 +249,11 @@
                 </div>
                 <button type="button" id="btn-reset-upstream-form" class="btn ghost small">新建</button>
               </div>
-              <p class="muted form-hint">在此写入 Proxy 可访问的 Agent 地址与 Agent Token；保存后可「导入为 Agent」供控制台使用。</p>
+              <p class="muted form-hint">在此填写 <strong>Proxy 能访问的</strong> Agent 地址与 <strong>Agent Token</strong>（与直连 Admin 时相同；若轮换过请用最新 Token / <code>data/auth.token</code>）。保存时会由 Proxy 探测校验。</p>
               <form id="form-upstream" class="form-grid">
                 <label>ID（路径键）<input name="id" id="upstream-id" required placeholder="node-01" /></label>
                 <label>显示名<input name="name" id="upstream-name" placeholder="prod-node-01" /></label>
-                <label class="span-2">Agent Base URL<input name="base_url" id="upstream-base-url" required placeholder="http://10.0.1.11:9100" /></label>
+                <label class="span-2">Agent Base URL<input name="base_url" id="upstream-base-url" required placeholder="http://10.0.1.11:9100 （Proxy 能访问的 Agent 地址，勿填 /a/…）" /></label>
                 <label class="span-2">Agent Token<input name="token" id="upstream-token" type="password" placeholder="Agent 的 X-AxleOps-Token" /></label>
                 <div class="form-actions">
                   <button type="submit" class="btn primary" id="btn-save-upstream">保存到 Proxy</button>
@@ -278,6 +278,18 @@
             </div>
           </header>
           <section class="surface">
+            <div class="overview-toolbar">
+              <label class="overview-search-wrap">
+                <span class="sr-only">搜索</span>
+                <input
+                  type="search"
+                  id="overview-search"
+                  placeholder="搜索 Agent / 服务 / 状态 / 路径…"
+                  autocomplete="off"
+                />
+              </label>
+              <p class="muted overview-drag-hint">按住整行拖动可调整顺序</p>
+            </div>
             <div id="overview-list" class="service-list"></div>
             <p id="overview-empty" class="empty-state inline" hidden>
               <span class="empty-title">暂无服务</span>

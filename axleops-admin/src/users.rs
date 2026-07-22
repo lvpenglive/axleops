@@ -119,6 +119,13 @@ impl UserStore {
                 expires_at TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS user_prefs (
+                user_id TEXT NOT NULL,
+                pref_key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, pref_key)
+            );
             ",
         )?;
 
@@ -388,6 +395,33 @@ impl UserStore {
         // Force re-login after password change.
         self.revoke_user_sessions(user_id)?;
         Ok(())
+    }
+
+    pub fn get_pref(&self, user_id: &str, pref_key: &str) -> Result<Option<String>, UserError> {
+        self.with_conn(|conn| {
+            conn.query_row(
+                "SELECT value FROM user_prefs WHERE user_id = ?1 AND pref_key = ?2",
+                params![user_id, pref_key],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(UserError::from)
+        })
+    }
+
+    pub fn set_pref(&self, user_id: &str, pref_key: &str, value: &str) -> Result<(), UserError> {
+        let now = Utc::now().to_rfc3339();
+        self.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO user_prefs (user_id, pref_key, value, updated_at)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(user_id, pref_key) DO UPDATE SET
+                   value = excluded.value,
+                   updated_at = excluded.updated_at",
+                params![user_id, pref_key, value, now],
+            )?;
+            Ok(())
+        })
     }
 }
 

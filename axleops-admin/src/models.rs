@@ -225,6 +225,16 @@ pub struct OverviewResponse {
     pub services: Vec<OverviewServiceRow>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OverviewOrderView {
+    pub keys: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OverviewOrderRequest {
+    pub keys: Vec<String>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct RotateTokenRequest {
     /// When true, ask the remote Agent to rotate and persist the returned token.

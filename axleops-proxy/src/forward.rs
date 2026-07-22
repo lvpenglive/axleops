@@ -56,7 +56,7 @@ pub async fn forward_to_agent(
     };
 
     let mut builder = client.request(reqwest_method, &url);
-    builder = builder.header("X-AxleOps-Token", &upstream.token);
+    builder = builder.header("X-AxleOps-Token", upstream.token.trim());
 
     for (name, value) in inbound_headers.iter() {
         let key = name.as_str();

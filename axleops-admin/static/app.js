@@ -60,6 +60,7 @@
     overviewList: document.getElementById("overview-list"),
     overviewEmpty: document.getElementById("overview-empty"),
     overviewSummary: document.getElementById("overview-summary"),
+    overviewSearch: document.getElementById("overview-search"),
     btnReloadOverview: document.getElementById("btn-reload-overview"),
     btnRefreshOverview: document.getElementById("btn-refresh-overview"),
     btnRotateAgentToken: document.getElementById("btn-rotate-agent-token"),
@@ -177,6 +178,7 @@
   };
 
   const ONLINE_INTERVAL_MS = 15000;
+  const OVERVIEW_ORDER_LEGACY_KEY = "axleops_overview_order_v1";
 
   const state = {
     rail: "overview",
@@ -184,6 +186,11 @@
     agents: [],
     proxies: [],
     upstreams: [],
+    overviewRows: [],
+    overviewMeta: { agents_total: 0, agents_reachable: 0 },
+    overviewOrder: [],
+    overviewQuery: "",
+    overviewDragKey: null,
     selectedId: null,
     selectedProxyId: null,
     editingUpstreamId: null,
@@ -305,8 +312,11 @@
     if (/timeout|timed out/i.test(s)) {
       return `请求超时：目标无响应或网络过慢。\n${s}`;
     }
+    if (/下游 Agent Token 无效|Agent Token 无效/i.test(s)) {
+      return s;
+    }
     if (/401|unauthorized|invalid or missing.*token/i.test(s)) {
-      return `认证失败：Token 不正确或权限不足。\n${s}`;
+      return `认证失败：检查 Token。经 Proxy「保存下游」若提示 Agent Token 无效，请与直连成功的 Token 保持一致（含轮换后的 data/auth.token）。若提示 Proxy Token，则改 Admin 里登记的 Proxy 密钥。\n${s}`;
     }
     if (/404|not found/i.test(s)) {
       return `目标不存在：检查名称、路径或上游 id。\n${s}`;
@@ -440,34 +450,159 @@
     loadOverview();
   }
 
-  async function loadOverview() {
+  function overviewRowKey(row) {
+    return `${row.agent_id || ""}::${row.name || "__unreachable__"}`;
+  }
+
+  function readLegacyOverviewOrder() {
+    try {
+      const raw = localStorage.getItem(OVERVIEW_ORDER_LEGACY_KEY);
+      const list = raw ? JSON.parse(raw) : [];
+      return Array.isArray(list) ? list.map(String) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  async function loadOverviewOrder() {
+    try {
+      const res = await api("/api/v1/prefs/overview-order");
+      let keys = Array.isArray(res.data && res.data.keys) ? res.data.keys.map(String) : [];
+      if (!keys.length) {
+        const legacy = readLegacyOverviewOrder();
+        if (legacy.length) {
+          keys = legacy;
+          await api("/api/v1/prefs/overview-order", {
+            method: "PUT",
+            body: JSON.stringify({ keys }),
+          });
+          try {
+            localStorage.removeItem(OVERVIEW_ORDER_LEGACY_KEY);
+          } catch (_) {}
+        }
+      }
+      state.overviewOrder = keys;
+    } catch {
+      state.overviewOrder = readLegacyOverviewOrder();
+    }
+  }
+
+  async function persistOverviewOrder(keys) {
+    state.overviewOrder = keys.slice();
+    try {
+      await api("/api/v1/prefs/overview-order", {
+        method: "PUT",
+        body: JSON.stringify({ keys: state.overviewOrder }),
+      });
+    } catch (e) {
+      showToast(e.message || "保存总览顺序失败", true);
+    }
+  }
+
+  function sortOverviewRows(rows) {
+    const order = state.overviewOrder || [];
+    const rank = new Map(order.map((k, i) => [k, i]));
+    return rows.slice().sort((a, b) => {
+      const ka = overviewRowKey(a);
+      const kb = overviewRowKey(b);
+      const ia = rank.has(ka) ? rank.get(ka) : Number.MAX_SAFE_INTEGER;
+      const ib = rank.has(kb) ? rank.get(kb) : Number.MAX_SAFE_INTEGER;
+      if (ia !== ib) return ia - ib;
+      const an = `${a.agent_name || ""}\0${a.name || ""}`;
+      const bn = `${b.agent_name || ""}\0${b.name || ""}`;
+      return an.localeCompare(bn, "zh");
+    });
+  }
+
+  function ensureOverviewOrder(rows) {
+    const keys = rows.map(overviewRowKey);
+    const prev = (state.overviewOrder || []).filter((k) => keys.includes(k));
+    const missing = keys.filter((k) => !prev.includes(k));
+    const next = prev.concat(missing);
+    const changed =
+      next.length !== (state.overviewOrder || []).length ||
+      next.some((k, i) => k !== state.overviewOrder[i]);
+    state.overviewOrder = next;
+    if (changed) {
+      persistOverviewOrder(next);
+    }
+  }
+
+  function moveOverviewOrder(fromKey, toKey, placeAfter) {
+    if (!fromKey || !toKey || fromKey === toKey) return;
+    const keys = (state.overviewOrder || []).slice();
+    const fromIdx = keys.indexOf(fromKey);
+    let toIdx = keys.indexOf(toKey);
+    if (fromIdx < 0 || toIdx < 0) return;
+    keys.splice(fromIdx, 1);
+    toIdx = keys.indexOf(toKey);
+    if (toIdx < 0) return;
+    keys.splice(placeAfter ? toIdx + 1 : toIdx, 0, fromKey);
+    persistOverviewOrder(keys);
+  }
+
+  function overviewMatchesQuery(row, q) {
+    if (!q) return true;
+    const hay = [
+      row.agent_name,
+      row.name,
+      row.state,
+      row.kind,
+      row.target,
+      row.message,
+      row.error,
+      row.pid != null ? String(row.pid) : "",
+    ]
+      .filter(Boolean)
+      .join("\n")
+      .toLowerCase();
+    return hay.includes(q);
+  }
+
+  function renderOverview() {
     if (!els.overviewList) return;
     els.overviewList.innerHTML = "";
-    try {
-      const res = await api("/api/v1/overview/services");
-      const data = res.data || {};
-      const list = Array.isArray(data.services) ? data.services : [];
-      const total = data.agents_total || 0;
-      const reachable = data.agents_reachable || 0;
-      if (els.overviewSummary) {
-        els.overviewSummary.textContent = `Agent ${reachable}/${total} 可达 · 服务行 ${list.length}`;
+    const all = (state.overviewRows || []).filter((r) => r.name || r.error);
+    ensureOverviewOrder(all);
+    const sorted = sortOverviewRows(all);
+    const q = String(state.overviewQuery || "")
+      .trim()
+      .toLowerCase();
+    const rows = sorted.filter((r) => overviewMatchesQuery(r, q));
+    const { agents_total: total, agents_reachable: reachable } = state.overviewMeta;
+    if (els.overviewSummary) {
+      const filterNote = q ? ` · 筛选 ${rows.length}/${sorted.length}` : ` · 服务行 ${sorted.length}`;
+      els.overviewSummary.textContent = `Agent ${reachable}/${total} 可达${filterNote}`;
+    }
+    if (els.overviewEmpty) {
+      els.overviewEmpty.hidden = rows.length > 0;
+      const titleEl = els.overviewEmpty.querySelector(".empty-title");
+      const mutedEl = els.overviewEmpty.querySelector(".muted");
+      if (!rows.length && q) {
+        if (titleEl) titleEl.textContent = "无匹配项";
+        if (mutedEl) mutedEl.textContent = "试试其他关键词，或清空搜索";
+      } else if (!rows.length) {
+        if (titleEl) titleEl.textContent = "暂无服务";
+        if (mutedEl) mutedEl.textContent = "登记 Agent 并启动服务后会出现在这里";
       }
-      const rows = list.filter((r) => r.name || r.error);
-      if (els.overviewEmpty) els.overviewEmpty.hidden = rows.length > 0;
-      rows.forEach((row, i) => {
-        const el = document.createElement("div");
-        el.className = "service-item";
-        el.style.animationDelay = `${i * 30}ms`;
-        const stateName = String(row.state || "unknown").toLowerCase();
-        const title = row.name
-          ? `${row.agent_name} / ${row.name}`
-          : `${row.agent_name}（不可达）`;
-        const meta = row.error
-          ? row.error
-          : [row.target || "", row.kind || "", row.pid ? `pid ${row.pid}` : "", row.message || ""]
-              .filter(Boolean)
-              .join(" · ");
-        el.innerHTML = `
+    }
+    rows.forEach((row, i) => {
+      const el = document.createElement("div");
+      el.className = "service-item overview-item";
+      el.draggable = true;
+      el.dataset.key = overviewRowKey(row);
+      el.style.animationDelay = `${Math.min(i, 20) * 25}ms`;
+      const stateName = String(row.state || "unknown").toLowerCase();
+      const title = row.name
+        ? `${row.agent_name} / ${row.name}`
+        : `${row.agent_name}（不可达）`;
+      const meta = row.error
+        ? row.error
+        : [row.target || "", row.kind || "", row.pid ? `pid ${row.pid}` : "", row.message || ""]
+            .filter(Boolean)
+            .join(" · ");
+      el.innerHTML = `
+          <span class="overview-drag-handle" title="拖动排序" aria-hidden="true">⋮⋮</span>
           <div class="info">
             <span class="state-pill ${escapeHtml(stateName)}">${escapeHtml(stateName)}</span>
             <strong title="${escapeHtml(title)}">${escapeHtml(title)}</strong>
@@ -476,12 +611,78 @@
           <div class="row-actions">
             <button type="button" class="btn small" data-act="open">打开</button>
           </div>`;
-        el.querySelector("[data-act=open]").addEventListener("click", () => {
-          if (row.agent_id) selectAgent(row.agent_id);
-        });
-        els.overviewList.appendChild(el);
+      el.querySelector("[data-act=open]").addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        if (row.agent_id) selectAgent(row.agent_id);
       });
+      // Avoid starting a drag when interacting with the Open button.
+      el.querySelector("[data-act=open]").addEventListener("mousedown", (ev) => {
+        ev.stopPropagation();
+      });
+      el.addEventListener("dragstart", (ev) => {
+        if (ev.target.closest("[data-act=open], .row-actions")) {
+          ev.preventDefault();
+          return;
+        }
+        state.overviewDragKey = el.dataset.key;
+        el.classList.add("dragging");
+        ev.dataTransfer.effectAllowed = "move";
+        try {
+          ev.dataTransfer.setData("text/plain", el.dataset.key);
+        } catch (_) {}
+      });
+      el.addEventListener("dragend", () => {
+        state.overviewDragKey = null;
+        el.classList.remove("dragging");
+        els.overviewList
+          .querySelectorAll(".drag-over")
+          .forEach((n) => n.classList.remove("drag-over"));
+      });
+      el.addEventListener("dragover", (ev) => {
+        ev.preventDefault();
+        ev.dataTransfer.dropEffect = "move";
+        els.overviewList
+          .querySelectorAll(".drag-over")
+          .forEach((n) => n.classList.remove("drag-over"));
+        el.classList.add("drag-over");
+      });
+      el.addEventListener("dragleave", (ev) => {
+        if (!el.contains(ev.relatedTarget)) el.classList.remove("drag-over");
+      });
+      el.addEventListener("drop", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        el.classList.remove("drag-over");
+        const from =
+          state.overviewDragKey ||
+          (ev.dataTransfer && ev.dataTransfer.getData("text/plain")) ||
+          "";
+        const to = el.dataset.key;
+        if (!from || !to || from === to) return;
+        const rect = el.getBoundingClientRect();
+        const placeAfter = ev.clientY > rect.top + rect.height / 2;
+        moveOverviewOrder(from, to, placeAfter);
+        renderOverview();
+      });
+      els.overviewList.appendChild(el);
+    });
+  }
+
+  async function loadOverview() {
+    if (!els.overviewList) return;
+    try {
+      await loadOverviewOrder();
+      const res = await api("/api/v1/overview/services");
+      const data = res.data || {};
+      const list = Array.isArray(data.services) ? data.services : [];
+      state.overviewRows = list;
+      state.overviewMeta = {
+        agents_total: data.agents_total || 0,
+        agents_reachable: data.agents_reachable || 0,
+      };
+      renderOverview();
     } catch (e) {
+      state.overviewRows = [];
       if (els.overviewSummary) els.overviewSummary.textContent = "加载失败";
       if (els.overviewEmpty) els.overviewEmpty.hidden = false;
       showToast(e.message, true);
@@ -1978,7 +2179,18 @@
         null,
         2
       );
-      showToast(data.reachable ? "Proxy 可达" : "Proxy 不可达", !data.reachable);
+      const detailMsg =
+        typeof data.detail === "string"
+          ? data.detail
+          : data.detail && data.detail.message
+            ? String(data.detail.message)
+            : "";
+      showToast(
+        data.reachable
+          ? "Proxy 可达（Token 校验通过）"
+          : detailMsg || "Proxy 不可达",
+        !data.reachable
+      );
     } catch (e) {
       renderProxies();
       showToast(e.message, true);
@@ -2300,6 +2512,12 @@
   }
   if (els.btnRefreshOverview) {
     els.btnRefreshOverview.addEventListener("click", () => loadOverview());
+  }
+  if (els.overviewSearch) {
+    els.overviewSearch.addEventListener("input", () => {
+      state.overviewQuery = els.overviewSearch.value || "";
+      renderOverview();
+    });
   }
 
   els.tabAgents.addEventListener("click", () => {

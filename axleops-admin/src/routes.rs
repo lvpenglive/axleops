@@ -1,10 +1,10 @@
 use crate::auth::AuthUser;
 use crate::models::{
     AgentHealthView, AgentInfo, ApiResponse, CreateUpstreamRequest, HealthInfo,
-    ImportUpstreamRequest, OverviewResponse, OverviewServiceRow, ProxyHealthView, ProxyInfo,
-    RegisterAgentRequest, RegisterProxyRequest, RotateTokenRequest, RotateTokenResponse,
-    StartServiceRequest, UpdateAgentRequest, UpdateProxyRequest, UpdateUpstreamRequest,
-    UpstreamView,
+    ImportUpstreamRequest, OverviewOrderRequest, OverviewOrderView, OverviewResponse,
+    OverviewServiceRow, ProxyHealthView, ProxyInfo, RegisterAgentRequest, RegisterProxyRequest,
+    RotateTokenRequest, RotateTokenResponse, StartServiceRequest, UpdateAgentRequest,
+    UpdateProxyRequest, UpdateUpstreamRequest, UpstreamView,
 };
 use crate::users::{
     AuthContext, ChangePasswordRequest, CreateUserRequest, LoginRequest, LoginResponse,
@@ -36,6 +36,10 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/v1/audit-logs", get(list_audit_logs))
         .route("/api/v1/overview/services", get(overview_services))
+        .route(
+            "/api/v1/prefs/overview-order",
+            get(get_overview_order).put(put_overview_order),
+        )
         .route("/api/v1/agents", get(list_agents).post(register_agent))
         .route(
             "/api/v1/agents/{id}",
@@ -439,6 +443,65 @@ async fn ping_agent(
 
 fn new_token() -> String {
     format!("axle_{}", uuid::Uuid::new_v4().simple())
+}
+
+const OVERVIEW_ORDER_PREF: &str = "overview_order";
+
+fn prefs_user_id(auth: &AuthUser) -> String {
+    auth.0
+        .user_id
+        .clone()
+        .unwrap_or_else(|| "__service__".to_string())
+}
+
+async fn get_overview_order(
+    auth: AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<OverviewOrderView>>, (StatusCode, Json<ApiResponse<()>>)> {
+    let uid = prefs_user_id(&auth);
+    let raw = state
+        .users
+        .get_pref(&uid, OVERVIEW_ORDER_PREF)
+        .map_err(user_err)?;
+    let keys = match raw {
+        Some(text) => serde_json::from_str::<Vec<String>>(&text).unwrap_or_default(),
+        None => Vec::new(),
+    };
+    Ok(Json(ApiResponse::ok("ok", OverviewOrderView { keys })))
+}
+
+async fn put_overview_order(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Json(req): Json<OverviewOrderRequest>,
+) -> Result<Json<ApiResponse<OverviewOrderView>>, (StatusCode, Json<ApiResponse<()>>)> {
+    let uid = prefs_user_id(&auth);
+    let mut keys = Vec::with_capacity(req.keys.len());
+    for k in req.keys {
+        let k = k.trim().to_string();
+        if k.is_empty() || keys.iter().any(|x| x == &k) {
+            continue;
+        }
+        if k.len() > 256 {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err("overview order key too long")),
+            ));
+        }
+        keys.push(k);
+    }
+    if keys.len() > 2000 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<()>::err("too many overview order keys")),
+        ));
+    }
+    let value = serde_json::to_string(&keys).unwrap_or_else(|_| "[]".into());
+    state
+        .users
+        .set_pref(&uid, OVERVIEW_ORDER_PREF, &value)
+        .map_err(user_err)?;
+    Ok(Json(ApiResponse::ok("ok", OverviewOrderView { keys })))
 }
 
 async fn overview_services(
@@ -1082,7 +1145,9 @@ async fn ping_proxy(
 ) -> Result<Json<ApiResponse<ProxyHealthView>>, (StatusCode, Json<ApiResponse<()>>)> {
     let proxy = state.proxies.get(&id).map_err(proxy_registry_err)?;
     let as_agent = proxy_as_agent(&proxy);
-    match crate::proxy::agent_health(&state.http, &as_agent).await {
+    // Must hit an authenticated endpoint. Proxy `/health` is open and would hide a wrong
+    // Admin→Proxy token until upstream create/list fails with "invalid token".
+    match crate::proxy::agent_get(&state.http, &as_agent, "/api/v1/upstreams").await {
         Ok(detail) => Ok(Json(ApiResponse::ok(
             "reachable",
             ProxyHealthView {
@@ -1092,15 +1157,27 @@ async fn ping_proxy(
                 detail,
             },
         ))),
-        Err(e) => Ok(Json(ApiResponse::ok(
-            "unreachable",
-            ProxyHealthView {
-                proxy_id: proxy.id,
-                proxy_name: proxy.name,
-                reachable: false,
-                detail: Value::String(e.to_string()),
-            },
-        ))),
+        Err(e) => {
+            let detail = match &e {
+                ProxyError::AgentStatus { status, body }
+                    if status.as_u16() == 401 || status.as_u16() == 403 =>
+                {
+                    Value::String(format!(
+                        "Proxy Token 不正确：Admin 登记的 Token 须与 Proxy config.toml 的 token 一致（不是下游 Agent Token）。{body}"
+                    ))
+                }
+                _ => Value::String(e.to_string()),
+            };
+            Ok(Json(ApiResponse::ok(
+                "unreachable",
+                ProxyHealthView {
+                    proxy_id: proxy.id,
+                    proxy_name: proxy.name,
+                    reachable: false,
+                    detail,
+                },
+            )))
+        }
     }
 }
 
@@ -1340,29 +1417,32 @@ fn proxy_err(e: ProxyError) -> (StatusCode, Json<ApiResponse<()>>) {
         ProxyError::AgentStatus { status, body } => {
             let code = StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
             let hint = match status.as_u16() {
-                401 | 403 => "?????Token ?????",
-                404 => "???????? Agent/Proxy ????? id",
-                409 => "?????????????",
-                502 | 503 | 504 => "??????? Proxy ????? Agent ???",
-                _ => "??????",
+                401 | 403 => {
+                    "认证失败：若文案含 Proxy token，请改 Admin 里登记的 Proxy Token；\
+                     若含 Agent token，请改下游 Agent Token。经 Proxy 添加下游时 Base URL 必须是 Agent 地址（host:9100），不能是 /a/<id>"
+                }
+                404 => "目标不存在：检查 Agent/Proxy 地址或上游 id",
+                409 => "资源冲突：名称或 id 可能已存在",
+                502 | 503 | 504 => "下游不可用：经 Proxy 时确认上游 Agent 可达",
+                _ => "下游返回错误",
             };
             let body = body.trim();
             let detail = if body.is_empty() {
                 String::new()
             } else if body.len() > 240 {
-                format!(" ? {}?", &body[..240])
+                format!(" | {}", &body[..240])
             } else {
-                format!(" ? {body}")
+                format!(" | {body}")
             };
-            (code, format!("{hint}?HTTP {status}?{detail}"))
+            (code, format!("{hint} (HTTP {status}){detail}"))
         }
         ProxyError::Http(err) => {
             let msg = if err.is_timeout() {
-                format!("????????????????{err}?")
+                format!("请求超时：目标无响应或网络过慢。{err}")
             } else if err.is_connect() {
-                format!("???? Agent/Proxy?????????????????{err}?")
+                format!("无法连接 Agent/Proxy：检查地址、防火墙与进程是否启动。{err}")
             } else {
-                format!("???????{err}")
+                format!("转发请求失败：{err}")
             };
             (StatusCode::BAD_GATEWAY, msg)
         }

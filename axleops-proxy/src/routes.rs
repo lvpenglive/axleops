@@ -63,6 +63,67 @@ fn store_err(e: StoreError) -> (StatusCode, Json<serde_json::Value>) {
     )
 }
 
+fn verify_err(message: impl Into<String>) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({
+            "ok": false,
+            "message": message.into(),
+        })),
+    )
+}
+
+/// Probe Agent with the given token (authenticated API). Distinguishes bad token vs unreachable.
+async fn verify_agent_token(
+    client: &reqwest::Client,
+    base_url: &str,
+    token: &str,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    let base = base_url.trim().trim_end_matches('/');
+    if base.contains("/a/") || base.ends_with("/a") {
+        return Err(verify_err(
+            "下游 Base URL 应填 Agent 真实地址（例如 http://10.0.1.11:9100），不要填 Proxy 的 http://proxy:9200/a/<id>",
+        ));
+    }
+    if token.trim().is_empty() {
+        return Err(verify_err("Agent Token 不能为空"));
+    }
+
+    let url = format!("{base}/api/v1/services");
+    let resp = client
+        .get(&url)
+        .header("X-AxleOps-Token", token.trim())
+        .send()
+        .await
+        .map_err(|e| {
+            verify_err(format!(
+                "Proxy 无法连接 Agent（探测 {url}）。\
+                 请填 Proxy 机器能访问的地址，不要用 Admin 本机的 127.0.0.1（除非 Agent 与 Proxy 同机）。{e}"
+            ))
+        })?;
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if status.as_u16() == 401 || status.as_u16() == 403 {
+        // Hitting Proxy itself with Agent token often yields Proxy-auth 401.
+        if body.contains("Proxy token") || body.contains("Admin→Proxy") {
+            return Err(verify_err(format!(
+                "探测地址更像 Proxy 而不是 Agent（{url}）。下游 Base URL 请改为 Agent 的 host:9100。详情：{body}"
+            )));
+        }
+        return Err(verify_err(format!(
+            "下游 Agent Token 被拒绝（探测 {url}，token 长度 {}）。\
+             请与正在运行的 Agent 一致：优先看 data/auth.token，否则才是 config.toml 的 token。详情：{body}",
+            token.trim().chars().count()
+        )));
+    }
+    if !status.is_success() {
+        return Err(verify_err(format!(
+            "下游 Agent 返回 HTTP {status}（探测 {url}）：{body}"
+        )));
+    }
+    Ok(())
+}
+
 async fn list_upstreams(
     State(state): State<AppState>,
     _auth: AuthToken,
@@ -81,6 +142,13 @@ async fn create_upstream(
     _auth: AuthToken,
     Json(req): Json<UpsertUpstreamRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let base_url = req.base_url.trim().trim_end_matches('/').to_string();
+    let token = req.token.trim().to_string();
+    verify_agent_token(&state.http, &base_url, &token).await?;
+
+    let mut req = req;
+    req.base_url = base_url;
+    req.token = token;
     let rec = state.store.create(req).map_err(store_err)?;
     tracing::info!(id = %rec.id, base_url = %rec.base_url, "upstream created");
     Ok(Json(serde_json::json!({
@@ -96,6 +164,28 @@ async fn update_upstream(
     Path(id): Path<String>,
     Json(req): Json<UpdateUpstreamRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let existing = state.store.get(&id).map_err(store_err)?;
+    let base_url = req
+        .base_url
+        .as_ref()
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| existing.base_url.clone());
+    let token = req
+        .token
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| existing.token.clone());
+    verify_agent_token(&state.http, &base_url, &token).await?;
+
+    let mut req = req;
+    if req.base_url.is_some() {
+        req.base_url = Some(base_url);
+    }
+    if req.token.is_some() {
+        req.token = Some(token);
+    }
     let rec = state.store.update(&id, req).map_err(store_err)?;
     tracing::info!(id = %rec.id, "upstream updated");
     Ok(Json(serde_json::json!({

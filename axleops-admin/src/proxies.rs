@@ -94,7 +94,8 @@ impl ProxyRegistry {
         if base_url.is_empty() {
             return Err(ProxyRegistryError::Other("base_url is required".into()));
         }
-        if req.token.trim().is_empty() {
+        let token = req.token.trim().to_string();
+        if token.is_empty() {
             return Err(ProxyRegistryError::Other("token is required".into()));
         }
 
@@ -103,7 +104,7 @@ impl ProxyRegistry {
             id: Uuid::new_v4().to_string(),
             name,
             base_url,
-            token: req.token,
+            token,
             notes: req.notes.unwrap_or_default(),
             created_at: now,
             updated_at: now,
@@ -151,10 +152,11 @@ impl ProxyRegistry {
             proxy.base_url = url.to_string();
         }
         if let Some(ref token) = req.token {
-            if token.trim().is_empty() {
+            let token = token.trim().to_string();
+            if token.is_empty() {
                 return Err(ProxyRegistryError::Other("token cannot be empty".into()));
             }
-            proxy.token = token.clone();
+            proxy.token = token;
         }
         if let Some(notes) = req.notes {
             proxy.notes = notes;

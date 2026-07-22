@@ -195,9 +195,14 @@ impl UpstreamStore {
                 name
             },
             base_url: req.base_url.trim().trim_end_matches('/').to_string(),
-            token: req.token,
+            token: req.token.trim().to_string(),
         };
         rec.validate()?;
+
+        // Reject empty after trim (validate already checks, but keep explicit).
+        if rec.token.is_empty() {
+            return Err(StoreError::Other("token is required".into()));
+        }
 
         let mut map = self
             .inner
@@ -232,7 +237,8 @@ impl UpstreamStore {
             rec.base_url = url;
         }
         if let Some(token) = req.token {
-            if token.trim().is_empty() {
+            let token = token.trim().to_string();
+            if token.is_empty() {
                 return Err(StoreError::Other("token cannot be empty".into()));
             }
             rec.token = token;

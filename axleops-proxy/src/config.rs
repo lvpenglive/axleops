@@ -62,6 +62,7 @@ impl Config {
         if let Ok(v) = std::env::var("AXLEOPS_PROXY_TOKEN") {
             cfg.token = v;
         }
+        cfg.token = cfg.token.trim().to_string();
         if let Ok(v) = std::env::var("AXLEOPS_PROXY_TIMEOUT_SECS") {
             if let Ok(n) = v.parse() {
                 cfg.timeout_secs = n;

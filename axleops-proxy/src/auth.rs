@@ -17,12 +17,13 @@ impl FromRequestParts<AppState> for AuthToken {
             .headers
             .get("X-AxleOps-Token")
             .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
+            .unwrap_or("")
+            .trim();
 
-        if provided.is_empty() || provided != state.config.token {
+        if provided.is_empty() || provided != state.config.token.trim() {
             return Err((
                 StatusCode::UNAUTHORIZED,
-                "invalid or missing X-AxleOps-Token",
+                "invalid or missing Proxy token (Admin→Proxy X-AxleOps-Token)",
             ));
         }
         Ok(AuthToken)

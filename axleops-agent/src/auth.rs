@@ -17,17 +17,18 @@ impl FromRequestParts<AppState> for AuthToken {
             .headers
             .get("X-AxleOps-Token")
             .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
+            .unwrap_or("")
+            .trim();
 
         let expected = state
             .token
             .read()
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "token lock poisoned"))?;
 
-        if provided.is_empty() || provided != expected.as_str() {
+        if provided.is_empty() || provided != expected.trim() {
             return Err((
                 StatusCode::UNAUTHORIZED,
-                "invalid or missing X-AxleOps-Token",
+                "invalid or missing Agent token (X-AxleOps-Token)",
             ));
         }
         Ok(AuthToken)
