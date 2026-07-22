@@ -5,7 +5,7 @@
 
 微服务及其他服务启停管理：支持 JAR、shell / Python 等脚本和通用命令。
 
-**当前版本：v0.4.0**（见 [CHANGELOG](CHANGELOG.md)）
+**当前版本：v0.4.1**（见 [CHANGELOG](CHANGELOG.md)）
 
 - Agent：机器端进程生命周期（启停、日志、探活、制品发布）
 - Admin：控制面 + Web 控制台 + SQLite Agent 注册
@@ -33,7 +33,7 @@ Admin 控制台左侧可切换 **Agents / Proxies**：登记多个 Proxy 后 Pin
 
 ## 版本功能计划
 
-当前发布版本为 **v0.4.0**。详细变更见 [CHANGELOG.md](CHANGELOG.md)。
+当前发布版本为 **v0.4.1**。详细变更见 [CHANGELOG.md](CHANGELOG.md)。
 
 ### v0.1 — 基线（已完成）
 

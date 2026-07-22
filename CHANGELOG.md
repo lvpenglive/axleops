@@ -13,6 +13,24 @@
 - 细粒度 RBAC
 - Admin 侧规格镜像、多环境标签
 
+## [0.4.1] - 2026-07-22
+
+### Added
+
+- 服务总览搜索过滤
+- 总览服务行拖拽排序（按登录用户持久化到 Admin SQLite）
+- Proxy 保存下游时校验 Agent 连通性与 Token
+
+### Fixed
+
+- Proxy / Agent 鉴权错误文案区分（Admin→Proxy vs Proxy→Agent）
+- Proxy Ping 改为鉴权探测，避免错误 Proxy Token 仍显示在线
+- 总览拖拽在部分浏览器无法启动的问题
+
+### Changed
+
+- 下游配置提示强调填写 Agent 真实地址（勿填 `/a/<id>` 或错误的 `127.0.0.1`）
+
 ## [0.4.0] - 2026-07-20
 
 ### Added

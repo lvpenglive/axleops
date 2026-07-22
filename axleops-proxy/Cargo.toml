@@ -1,6 +1,6 @@
 [package]
 name = "axleops-proxy"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 description = "AxleOps boundary proxy between admin and agents"
 authors = ["AxleOps"]
